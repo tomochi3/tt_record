@@ -14,8 +14,8 @@ test('newId: 20文字の英数字', () => {
 
 test('parseFriendInput: リンクとIDの両方を受け付ける', () => {
   const link = L.friendLink('https://example.com/tt_record/#old', A, '山田 太郎');
-  assert.deepEqual(L.parseFriendInput(link), { id: A, name: '山田 太郎' });
-  assert.deepEqual(L.parseFriendInput(`  ${A} `), { id: A, name: '' });
+  assert.deepEqual(L.parseFriendInput(link), { id: A, name: '山田 太郎', pub: '' });
+  assert.deepEqual(L.parseFriendInput(`  ${A} `), { id: A, name: '', pub: '' });
   assert.equal(L.parseFriendInput('https://example.com/#add=short'), null);
   assert.equal(L.parseFriendInput('こんにちは'), null);
 });
@@ -79,4 +79,51 @@ test('findDuplicate: 自分でも記録した同じ試合を見つける', () =>
   assert.equal(L.findDuplicate([other, own], local), own);
   assert.equal(L.findDuplicate([Object.assign({}, own, { remote: { from: A, id: 'z' } })], local), null);
   assert.equal(L.findDuplicate([Object.assign({}, own, { mySets: 3, oppSets: 1 })], local), null);
+});
+
+test('暗号: 2人の共通鍵で暗号化・復号でき、第三者・送り返し・改ざんは失敗する', async () => {
+  const a = await L.generateKeys();
+  const b = await L.generateKeys();
+  const c = await L.generateKeys();
+  assert.ok(L.isPub(a.pub));
+  const kAB = await L.pairKey(a.priv, b.pub);
+  const kBA = await L.pairKey(b.priv, a.pub);
+  const kCB = await L.pairKey(c.priv, b.pub);
+  const inner = L.encode({ t: 'name', from: A, name: '山田', key: 'n:1', at: 1 });
+  const envText = await L.seal(kAB, A, B, inner);
+  const env = L.parseEnvelope(envText);
+  assert.equal(env.kind, 'sealed');
+  assert.ok(!envText.includes('山田'));
+  assert.equal(await L.open(kBA, A, B, env), inner);
+  // 第三者 C が A になりすましても B は復号できない
+  const fake = L.parseEnvelope(await L.seal(kCB, A, B, inner));
+  assert.equal(await L.open(kBA, A, B, fake), null);
+  // A→B のメッセージを A の郵便受けに B 発として送り返しても受け付けない
+  assert.equal(await L.open(kAB, B, A, env), null);
+  // 改ざん
+  const t = Object.assign({}, env, { ct: env.ct.slice(0, -2) + (env.ct.endsWith('AA') ? 'BB' : 'AA') });
+  assert.equal(await L.open(kBA, A, B, t), null);
+});
+
+test('友だちリンク・友だちコード・IDの読み取り（公開鍵つき）', async () => {
+  const { pub } = await L.generateKeys();
+  const link = L.friendLink('https://example.com/tt_record/', A, '山田', pub);
+  assert.deepEqual(L.parseFriendInput(link), { id: A, name: '山田', pub });
+  assert.deepEqual(L.parseFriendInput(L.friendCode(A, pub)), { id: A, name: '', pub });
+  assert.deepEqual(L.parseFriendInput(A), { id: A, name: '', pub: '' });
+  const hello = L.parseEnvelope(L.helloEnvelope(A, '山田', pub));
+  assert.deepEqual(hello, { kind: 'hello', from: A, name: '山田', pub });
+});
+
+test('sanitizeMatch: インポートや保存データの不正な値を弾く', () => {
+  const ok = { id: 'x1', date: '2026-10-08', opponent: '山田', bestOf: 5, mode: 'simple', mySets: 3, oppSets: 1 };
+  assert.equal(L.sanitizeMatch(ok).bestOf, 5);
+  assert.equal(L.sanitizeMatch(Object.assign({}, ok, { bestOf: '<img src=x onerror=alert(1)>' })), null);
+  assert.equal(L.sanitizeMatch(Object.assign({}, ok, { bestOf: 1e9 })), null);
+  assert.equal(L.sanitizeMatch(Object.assign({}, ok, { id: '"><script>' })), null);
+  const odd = L.sanitizeMatch(Object.assign({}, ok, { date: '<b>', opponentId: 'x"', evil: '<script>', mode: 'detail', rally: '<x>' }));
+  assert.equal(odd.date, '');
+  assert.equal(odd.opponentId, undefined);
+  assert.equal(odd.evil, undefined);
+  assert.equal(odd.mode, 'simple');
 });

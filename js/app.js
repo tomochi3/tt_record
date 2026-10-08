@@ -12,7 +12,10 @@
   // ---------- データ保存（localStorage） ----------
 
   function loadDb() {
-    const empty = { settings: { myName: '自分' }, matches: [], friends: [], outbox: [], sync: { since: 0, seen: [] } };
+    const empty = {
+      settings: { myName: '自分' }, matches: [], friends: [], outbox: [], requests: [], blocked: [],
+      sync: { since: 0, seen: [], tomb: {} },
+    };
     let d = null;
     try {
       const raw = localStorage.getItem(STORE_KEY);
@@ -20,13 +23,22 @@
     } catch (e) {
       d = null;
     }
-    const out = d ? {
-      settings: Object.assign({}, empty.settings, d.settings),
-      matches: Array.isArray(d.matches) ? d.matches.filter(isMatchLike) : [],
-      friends: Array.isArray(d.friends) ? d.friends.filter((f) => f && L.isId(f.id)) : [],
-      outbox: Array.isArray(d.outbox) ? d.outbox : [],
-      sync: Object.assign({}, empty.sync, d.sync),
+    // 保存データも書き換えられている可能性があるので、読み込むたびに検証する
+    const arr = (v) => (Array.isArray(v) ? v : []);
+    const out = d && typeof d === 'object' ? {
+      settings: Object.assign({}, empty.settings, d.settings && typeof d.settings === 'object' ? d.settings : {}),
+      matches: arr(d.matches).map(L.sanitizeMatch).filter(Boolean),
+      friends: arr(d.friends).map(sanitizeFriend).filter(Boolean),
+      outbox: arr(d.outbox).filter((o) => o && L.isId(o.to) && typeof o.key === 'string'),
+      requests: arr(d.requests).filter((r) => r && L.isId(r.id) && L.isPub(r.pub))
+        .map((r) => ({ id: r.id, name: cleanName(r.name), pub: r.pub, at: r.at, buffer: arr(r.buffer).filter((t) => typeof t === 'string') })),
+      blocked: arr(d.blocked).filter(L.isId),
+      sync: Object.assign({}, empty.sync, d.sync && typeof d.sync === 'object' ? d.sync : {}),
     } : empty;
+    out.settings.myName = cleanName(out.settings.myName) || '自分';
+    if (!Array.isArray(out.sync.seen)) out.sync.seen = [];
+    if (!out.sync.tomb || typeof out.sync.tomb !== 'object') out.sync.tomb = {};
+    if (!Number.isFinite(out.sync.since)) out.sync.since = 0;
     if (!L.isId(out.settings.myId)) {
       out.settings.myId = L.newId((n) => crypto.getRandomValues(new Uint8Array(n)));
     }
@@ -36,17 +48,41 @@
   function saveDb() {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        version: 1, settings: db.settings, matches: db.matches, friends: db.friends, outbox: db.outbox, sync: db.sync,
+        version: 1, settings: db.settings, matches: db.matches, friends: db.friends, outbox: db.outbox,
+        requests: db.requests, blocked: db.blocked, sync: db.sync,
       }));
     } catch (e) {
       toast('保存に失敗しました');
     }
   }
 
+  function cleanName(v) {
+    return typeof v === 'string' ? v.trim().slice(0, 40) : '';
+  }
+
+  function sanitizeFriend(f) {
+    if (!f || !L.isId(f.id)) return null;
+    const out = { id: f.id, name: cleanName(f.name) || '友だち', remoteName: cleanName(f.remoteName), addedAt: f.addedAt };
+    if (L.isPub(f.pub)) out.pub = f.pub;
+    if (f.custom) out.custom = true;
+    if (Number.isFinite(f.nameAt)) out.nameAt = f.nameAt;
+    return out;
+  }
+
   function loadLive() {
     try {
-      const raw = localStorage.getItem(LIVE_KEY);
-      return raw ? JSON.parse(raw) : null;
+      const v = JSON.parse(localStorage.getItem(LIVE_KEY) || 'null');
+      if (!v || typeof v !== 'object' || ![3, 5, 7].includes(v.bestOf)) return null;
+      return {
+        date: typeof v.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.date) ? v.date : '',
+        opponent: cleanName(v.opponent),
+        event: cleanName(v.event),
+        memo: typeof v.memo === 'string' ? v.memo.slice(0, 2000) : '',
+        bestOf: v.bestOf,
+        firstServer: v.firstServer === 'opp' ? 'opp' : 'me',
+        rally: typeof v.rally === 'string' && /^[mo]{0,2000}$/.test(v.rally) ? v.rally : '',
+        startedAt: v.startedAt,
+      };
     } catch (e) {
       return null;
     }
@@ -59,11 +95,6 @@
     } catch (e) {
       /* 端末のストレージが使えなくても試合は続けられる */
     }
-  }
-
-  function isMatchLike(m) {
-    return m && typeof m === 'object' && typeof m.id === 'string' &&
-      Number.isInteger(m.mySets) && Number.isInteger(m.oppSets);
   }
 
   // ---------- ユーティリティ ----------
@@ -161,27 +192,60 @@
     return n;
   }
 
-  function addFriend(id, name) {
+  function addFriend(id, name, pub) {
     if (id === db.settings.myId) return null;
+    db.blocked = db.blocked.filter((x) => x !== id);
     let f = friendById(id);
-    if (f) return f;
-    f = { id, name: uniqueFriendName(name), remoteName: (name || '').trim(), addedAt: Date.now() };
-    db.friends.push(f);
+    if (!f) {
+      f = { id, name: uniqueFriendName(name), remoteName: cleanName(name), addedAt: Date.now() };
+      db.friends.push(f);
+    }
+    if (!f.pub && L.isPub(pub)) f.pub = pub;
     return f;
   }
 
   // ---------- 連携（送受信） ----------
+  //
+  // ・友だち申請 (hello) だけは相手の鍵をまだ知らないので、公開鍵と名前を暗号化せずに送る
+  // ・それ以外は2人の共通鍵で暗号化する。復号できたものだけを本人からの送信として扱う
+  // ・知らない人からの申請は、画面上部の帯で「追加」を押すまで友だちにしない
 
   let syncing = false;
   let lastSyncOk = null;
+  const keyCache = new Map();
+
+  // 端末の鍵ペアを用意する（初回だけ作成）。起動処理の最後で呼ぶ
+  let keysReady = Promise.resolve();
+  function prepareKeys() {
+    keysReady = (async () => {
+      const k = db.settings.keys;
+      if (!k || !L.isPub(k.pub) || !k.priv) {
+        db.settings.keys = await L.generateKeys();
+        saveDb();
+      }
+    })().catch(() => {
+      /* 古いブラウザなどで暗号が使えない場合は連携だけ止まる */
+    });
+  }
+
+  function myPub() {
+    return db.settings.keys ? db.settings.keys.pub : '';
+  }
+
+  async function keyFor(friend) {
+    const cacheKey = `${friend.id}:${friend.pub}`;
+    if (!keyCache.has(cacheKey)) keyCache.set(cacheKey, L.pairKey(db.settings.keys.priv, friend.pub));
+    return keyCache.get(cacheKey);
+  }
 
   function enqueue(to, key, ref, msg) {
     db.outbox = db.outbox.filter((o) => !(o.to === to && o.ref === ref));
-    db.outbox.push({ to, key, ref, body: L.encode(Object.assign({ from: db.settings.myId, name: myName(), key }, msg)), sentAt: 0 });
+    db.outbox.push({ to, key, ref, inner: L.encode(Object.assign({ from: db.settings.myId, name: myName(), key }, msg)), sentAt: 0 });
   }
 
   function queueHello(to) {
-    enqueue(to, `h:${db.settings.myId}`, 'hello', { t: 'hello' });
+    db.outbox = db.outbox.filter((o) => !(o.to === to && o.ref === 'hello'));
+    db.outbox.push({ to, key: `h:${db.settings.myId}`, ref: 'hello', hello: true, sentAt: 0 });
   }
 
   // 自分の名前が変わったことを全ての友だちに知らせる（古い知らせは新しいものに置き換える）
@@ -213,7 +277,8 @@
 
   function queueDelete(to, matchId) {
     if (!to || !friendById(to)) return;
-    enqueue(to, L.outboxKey('d', matchId, Date.now()), matchId, { t: 'del', id: matchId });
+    const at = Date.now();
+    enqueue(to, L.outboxKey('d', matchId, at), matchId, { t: 'del', id: matchId, at });
   }
 
   async function post(to, body) {
@@ -221,12 +286,25 @@
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   }
 
+  async function sealFor(friend, inner) {
+    return L.seal(await keyFor(friend), db.settings.myId, friend.id, inner);
+  }
+
   async function flushOutbox() {
     const now = Date.now();
     for (const o of db.outbox) {
       if (o.sentAt && now - o.sentAt < RESEND_MS) continue;
+      let body;
+      if (o.hello) {
+        body = L.helloEnvelope(db.settings.myId, myName(), myPub());
+      } else {
+        const f = friendById(o.to);
+        // 相手の鍵がまだ届いていなければ、届くまで送らずに待つ
+        if (!f || !f.pub || !o.inner) continue;
+        body = await sealFor(f, o.inner);
+      }
       try {
-        await post(o.to, o.body);
+        await post(o.to, body);
         o.sentAt = Date.now();
       } catch (e) {
         lastSyncOk = false;
@@ -235,18 +313,15 @@
     }
   }
 
-  // 受け取ったメッセージを反映し、返事(ack)すべきキーを返す
+  function isTombstoned(from, id, rev) {
+    const at = db.sync.tomb[`${from}:${id}`];
+    return at !== undefined && rev <= at;
+  }
+
+  // 受け取ったメッセージ（復号・検証済み）を反映し、返事(ack)すべきキーを返す
   function applyMessage(msg, now) {
-    if (msg.from === db.settings.myId) return null;
-    if (msg.t === 'hello') {
-      if (!friendById(msg.from)) {
-        const f = addFriend(msg.from, msg.name);
-        toast(`${f.name}さんと連携しました`);
-      }
-      return msg.key;
-    }
     const friend = friendById(msg.from);
-    if (!friend) return null;
+    if (!friend || msg.t === 'hello') return null;
     if (msg.t === 'name') {
       updateFriendName(friend, msg.name, msg.at);
       return msg.key;
@@ -261,9 +336,12 @@
       for (const x of db.matches) {
         if (x.remote && x.remote.from === msg.from && x.remote.id === msg.id) delete x.remote;
       }
+      // 古い試合データを後から送り直されても復活させない
+      db.sync.tomb[`${msg.from}:${msg.id}`] = Math.max(db.sync.tomb[`${msg.from}:${msg.id}`] || 0, msg.at || now);
       return msg.key;
     }
     if (msg.t === 'match') {
+      if (isTombstoned(msg.from, msg.m.id, msg.m.rev)) return msg.key;
       const local = L.toLocalMatch(msg.m, msg.from, friend.name, now);
       const existing = db.matches.find((x) => x.id === local.id);
       if (existing) {
@@ -287,47 +365,148 @@
     return null;
   }
 
+  // 友だち申請（暗号化されていない hello）を処理する。ack すべき相手の ID を返す
+  function handleHello(env) {
+    if (env.from === db.settings.myId) return null;
+    const friend = friendById(env.from);
+    if (friend) {
+      if (!friend.pub) {
+        // ID だけで追加した相手や、暗号化前から連携していた相手の鍵をここで受け取る
+        friend.pub = env.pub;
+        return env.from;
+      }
+      // 登録済みの鍵と違う鍵での申請は、なりすましの可能性があるので無視する
+      return friend.pub === env.pub ? env.from : null;
+    }
+    if (db.blocked.includes(env.from)) return null;
+    const req = db.requests.find((r) => r.id === env.from);
+    if (req) {
+      if (req.pub === env.pub) req.name = env.name;
+      return null;
+    }
+    db.requests.push({ id: env.from, name: env.name, pub: env.pub, at: Date.now(), buffer: [] });
+    db.requests = db.requests.slice(-20);
+    toast(`${env.name || '友だち'}さんから友だち申請が届きました`);
+    return null;
+  }
+
+  async function openSealed(env) {
+    const friend = friendById(env.from);
+    if (friend && friend.pub) {
+      const text = await L.open(await keyFor(friend), env.from, db.settings.myId, env);
+      return text ? { text } : null;
+    }
+    // 申請中の相手から先に届いた結果は、追加されるまで預かっておく
+    const req = db.requests.find((r) => r.id === env.from);
+    if (req) {
+      const text = await L.open(await keyFor(req), env.from, db.settings.myId, env);
+      if (text && req.buffer.length < 30) req.buffer.push(text);
+      return null;
+    }
+    return null;
+  }
+
+  async function sendAcks(acks) {
+    for (const [to, keys] of acks) {
+      const f = friendById(to);
+      if (!f || !f.pub || !keys.length) continue;
+      try {
+        await post(to, await sealFor(f, L.encode({ t: 'ack', from: db.settings.myId, name: myName(), keys })));
+      } catch (e) {
+        /* 返事が届かなくても相手が再送してくるので、そのときにまた返す */
+      }
+    }
+  }
+
+  function addAck(acks, to, key) {
+    if (!key) return;
+    if (!acks.has(to)) acks.set(to, []);
+    acks.get(to).push(key);
+  }
+
   async function pollInbox() {
     const since = db.sync.since ? db.sync.since : 'all';
-    const res = await fetch(`${NTFY}/${L.topicFor(db.settings.myId)}/json?poll=1&since=${since}`);
+    const res = await fetch(`${NTFY}/${L.topicFor(db.settings.myId)}/json?poll=1&since=${encodeURIComponent(since)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     const events = text.split('\n').filter(Boolean).map((line) => {
       try { return JSON.parse(line); } catch (e) { return null; }
-    }).filter((e) => e && e.event === 'message' && typeof e.message === 'string');
+    }).filter((e) => e && e.event === 'message' && typeof e.message === 'string' && typeof e.id === 'string');
     events.sort((a, b) => (a.time || 0) - (b.time || 0));
     const acks = new Map();
     let changed = false;
     for (const e of events) {
       if (db.sync.seen.includes(e.id)) continue;
       db.sync.seen.push(e.id);
-      if (e.time > db.sync.since) db.sync.since = e.time;
-      const msg = L.decode(e.message);
-      if (!msg) continue;
-      changed = true;
-      const key = applyMessage(msg, Date.now());
-      if (key) {
-        if (!acks.has(msg.from)) acks.set(msg.from, []);
-        acks.get(msg.from).push(key);
+      if (Number.isFinite(e.time) && e.time > db.sync.since) db.sync.since = e.time;
+      const env = L.parseEnvelope(e.message);
+      if (!env || env.from === db.settings.myId) continue;
+      if (env.kind === 'hello') {
+        const ackTo = handleHello(env);
+        if (ackTo) addAck(acks, ackTo, `h:${ackTo}`);
+        changed = true;
+        continue;
       }
+      let inner = null;
+      if (env.kind === 'sealed') {
+        const opened = await openSealed(env);
+        inner = opened && opened.text;
+      } else if (env.kind === 'legacy') {
+        // 暗号化前の形式は、まだ鍵を受け取っていない既存の友だちからだけ受け付ける
+        const f = friendById(env.from);
+        if (f && !f.pub) inner = env.text;
+      }
+      const msg = inner && L.decode(inner);
+      if (!msg || msg.from !== env.from) continue;
+      changed = true;
+      addAck(acks, msg.from, applyMessage(msg, Date.now()));
     }
     db.sync.seen = db.sync.seen.slice(-300);
-    for (const [to, keys] of acks) {
-      try {
-        await post(to, L.encode({ t: 'ack', from: db.settings.myId, name: myName(), keys }));
-      } catch (e) {
-        /* 返事が届かなくても相手が再送してくるので、そのときにまた返す */
-      }
-    }
+    await sendAcks(acks);
     return changed;
   }
 
+  // 申請を承認して友だちに追加する（預かっていた結果もここで反映する）
+  async function acceptRequest(id) {
+    const req = db.requests.find((r) => r.id === id);
+    if (!req) return null;
+    db.requests = db.requests.filter((r) => r.id !== id);
+    const f = addFriend(req.id, req.name, req.pub);
+    if (!f) return null;
+    queueHello(f.id);
+    const acks = new Map();
+    addAck(acks, f.id, `h:${f.id}`);
+    for (const text of req.buffer || []) {
+      const msg = L.decode(text);
+      if (msg && msg.from === f.id) addAck(acks, f.id, applyMessage(msg, Date.now()));
+    }
+    saveDb();
+    await keysReady;
+    await sendAcks(acks);
+    return f;
+  }
+
+  // 暗号化前から連携している友だちには、鍵を自動で送って切り替える（操作は不要）
+  function migrateLegacyFriends() {
+    for (const f of db.friends) {
+      if (!f.pub && !db.outbox.some((o) => o.to === f.id && o.hello)) queueHello(f.id);
+    }
+    for (const o of db.outbox) {
+      if (!o.hello && !o.inner && typeof o.body === 'string') {
+        o.inner = o.body;
+        delete o.body;
+      }
+    }
+  }
+
   async function sync(opts) {
-    // 友だちがまだいなくても、自分のリンクから追加された知らせ(hello)を受け取るため毎回確認する
+    // 友だちがまだいなくても、申請を受け取るため毎回確認する
     if (syncing || !navigator.onLine) return;
     syncing = true;
     let changed = false;
     try {
+      await keysReady;
+      if (!myPub()) throw new Error('no keys');
       changed = await pollInbox();
       lastSyncOk = true;
       await flushOutbox();
@@ -414,7 +593,9 @@
 
   function render() {
     const views = { list: viewList, new: viewForm, edit: viewForm, live: viewLive, match: viewMatch, stats: viewStats, opponent: viewOpponent, friends: viewFriends, settings: viewSettings };
-    main.innerHTML = (views[view] || viewList)();
+    // 友だち申請は入力中の画面以外ならどこでも上部に出し、その場で1回押せば追加できるようにする
+    const banner = ['new', 'edit', 'live'].includes(view) ? '' : requestBanner();
+    main.innerHTML = banner + (views[view] || viewList)();
     document.body.classList.toggle('is-live', view === 'live');
     const activeTab = view === 'edit' || view === 'live' ? 'new' : view === 'match' ? 'list'
       : view === 'opponent' ? (params.from || 'stats') : view;
@@ -424,6 +605,14 @@
     const tabNew = document.querySelector('#tabbar [data-view="new"]');
     tabNew.classList.toggle('has-live', !!live);
     afterRender();
+  }
+
+  function requestBanner() {
+    return db.requests.map((r) => `<div class="request-banner">
+      <span class="rb-text">🤝 <b>${esc(r.name || '名前未設定')}</b>さんから友だち申請</span>
+      <button type="button" class="btn primary small-btn" data-action="req-accept" data-id="${esc(r.id)}">追加</button>
+      <button type="button" class="btn small-btn" data-action="req-decline" data-id="${esc(r.id)}" aria-label="申請を断る">×</button>
+    </div>`).join('');
   }
 
   function resultBadge(m) {
@@ -772,7 +961,7 @@
         <div class="h2h-name">vs ${friend ? '🔗 ' : ''}${esc(name)}</div>
         <div class="h2h-rate">${pct(w, ms.length)}</div>
         <div class="muted">勝率（${w}勝 ${ms.length - w}敗）</div>
-        <div class="h2h-bar" aria-hidden="true"><span style="width:${(w / ms.length) * 100}%"></span></div>
+        <div class="h2h-bar" aria-hidden="true"><span data-w="${Math.round((w / ms.length) * 1000) / 10}"></span></div>
       </section>
       <div class="tiles">
         <div class="tile"><div class="t-val">${ms.length}</div><div class="t-lbl">対戦数</div></div>
@@ -808,7 +997,7 @@
 
   // 設定
   function myLink() {
-    return L.friendLink(location.href, db.settings.myId, myName());
+    return L.friendLink(location.href, db.settings.myId, myName(), myPub());
   }
 
   function qrSvg(text) {
@@ -857,12 +1046,13 @@
         <button type="button" class="btn" data-action="copy-link">リンクをコピー</button>
         <button type="button" class="btn" data-action="share-link">共有…</button>
       </div>
-      <p class="muted small id-line">あなたのID: <code>${esc(db.settings.myId)}</code></p>
+      <p class="muted small id-line">あなたの友だちコード: <code>${esc(L.friendCode(db.settings.myId, myPub()))}</code></p>
+      <button type="button" class="btn block" data-action="copy-code">友だちコードをコピー</button>
     </div>`;
 
     html += `<div class="card form">
       <h3>友だちを追加</h3>
-      <label>相手のリンクまたはIDを貼り付け<input type="text" id="friendInput" placeholder="https://…#add=… または ID" autocomplete="off"></label>
+      <label>相手のリンク・友だちコード・IDを貼り付け<input type="text" id="friendInput" placeholder="https://…#add=… または 友だちコード" autocomplete="off"></label>
       <button type="button" class="btn primary block" data-action="friend-add">追加</button>
     </div>`;
 
@@ -919,6 +1109,8 @@
   // ---------- 描画後のイベント（入力欄） ----------
 
   function afterRender() {
+    // CSPでstyle属性を禁止しているので、幅はスクリプトから設定する
+    for (const el of main.querySelectorAll('[data-w]')) el.style.width = `${Number(el.dataset.w)}%`;
     for (const el of main.querySelectorAll('[data-field]')) {
       el.addEventListener('input', () => {
         draft[el.dataset.field] = el.value;
@@ -1112,12 +1304,13 @@
     reader.onload = () => {
       try {
         const data = JSON.parse(reader.result);
-        const incoming = (Array.isArray(data) ? data : data.matches || []).filter(isMatchLike);
+        // ファイルの中身は信用せず、1件ずつ検証してから取り込む
+        const incoming = (Array.isArray(data) ? data : (data && data.matches) || []).map(L.sanitizeMatch).filter(Boolean);
         const ids = new Set(db.matches.map((m) => m.id));
         const added = incoming.filter((m) => !ids.has(m.id));
         db.matches.push(...added);
         if (Array.isArray(data.friends)) {
-          for (const f of data.friends) if (f && L.isId(f.id) && !friendById(f.id)) addFriend(f.id, f.name);
+          for (const f of data.friends.map(sanitizeFriend).filter(Boolean)) if (!friendById(f.id)) addFriend(f.id, f.name, f.pub);
         }
         saveDb();
         toast(`${added.length}試合を読み込みました`);
@@ -1228,7 +1421,17 @@
       case 'friend-accept': {
         const p = params.pending;
         if (!p) break;
-        const f = addFriend(p.id, p.name);
+        // 相手からの申請がすでに届いていれば、それを承認したことにする
+        const req = db.requests.find((r) => r.id === p.id);
+        if (req && (!p.pub || p.pub === req.pub)) {
+          acceptRequest(p.id).then((f) => {
+            if (f) toast(`${f.name}さんを友だちに追加しました`);
+            sync({ render: true });
+          });
+          go('friends');
+          break;
+        }
+        const f = addFriend(p.id, p.name, p.pub);
         if (f) {
           queueHello(f.id);
           saveDb();
@@ -1236,6 +1439,21 @@
           sync({ render: true });
         }
         go('friends');
+        break;
+      }
+      case 'req-accept':
+        acceptRequest(t.dataset.id).then((f) => {
+          if (f) toast(`${f.name}さんを友だちに追加しました`);
+          render();
+          sync({ render: true });
+        });
+        break;
+      case 'req-decline': {
+        // 断った相手からの申請は今後表示しない（相手のリンクから自分で追加すれば解除される）
+        db.requests = db.requests.filter((r) => r.id !== t.dataset.id);
+        if (!db.blocked.includes(t.dataset.id)) db.blocked.push(t.dataset.id);
+        saveDb();
+        render();
         break;
       }
       case 'friend-add': {
@@ -1275,6 +1493,9 @@
         render();
         break;
       }
+      case 'copy-code':
+        navigator.clipboard.writeText(L.friendCode(db.settings.myId, myPub())).then(() => toast('友だちコードをコピーしました'), () => toast('コピーできませんでした'));
+        break;
       case 'copy-link':
         navigator.clipboard.writeText(myLink()).then(() => toast('リンクをコピーしました'), () => toast('コピーできませんでした'));
         break;
@@ -1327,7 +1548,11 @@
   }, POLL_MS);
 
   applyTheme();
+  prepareKeys();
+  migrateLegacyFriends();
   if (!handleHash()) go(live ? 'live' : 'list');
+  // 初回は鍵の作成が終わってからQRコードを描き直す
+  keysReady.then(() => { if (view === 'friends') render(); });
   saveDb(); // 新しく作ったIDを保存しておく
   sync();
 })();

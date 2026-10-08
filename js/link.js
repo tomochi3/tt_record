@@ -1,5 +1,8 @@
-// 友だち連携のプロトコル（DOM・通信に依存しない純粋関数）
+// 友だち連携のプロトコル（DOMに依存しない関数）
 // 結果は ntfy.sh の「郵便受け」(トピック) を経由して届け、記録本体は各端末に保存する。
+// 郵便受けは ID を知っていれば誰でも読み書きできるので、友だちとのやり取りは
+// 端末ごとの鍵ペア (ECDH P-256) から作った2人だけの鍵で暗号化 (AES-GCM) する。
+// 暗号化が成功すること自体が「相手の秘密鍵を持つ本人からの送信」の証明になる。
 // ブラウザでは window.TTLink、Node では module.exports として使える。
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./scoring.js'));
@@ -11,8 +14,10 @@
   const ID_LENGTH = 20;
   const ID_RE = /^[A-Za-z0-9]{16,32}$/;
   const TOPIC_PREFIX = 'ttrec-';
-  // ntfy.sh は 4096 バイトを超える本文を添付ファイル扱いにするので、その手前に収める
-  const MAX_MESSAGE_BYTES = 3900;
+  // ntfy.sh は 4096 バイトを超える本文を添付ファイル扱いにするので、
+  // 暗号化して base64 にしても収まる大きさに抑える
+  const MAX_MESSAGE_BYTES = 2700;
+  const PUB_RE = /^[A-Za-z0-9_-]{87}$/;
   const MAX_TEXT = 100;
   const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -32,19 +37,34 @@
     return TOPIC_PREFIX + id;
   }
 
-  function friendLink(baseUrl, id, name) {
-    return `${baseUrl.split('#')[0]}#add=${id}&name=${encodeURIComponent(name || '')}`;
+  function isPub(pub) {
+    return typeof pub === 'string' && PUB_RE.test(pub);
   }
 
-  // 友だちリンク、または ID そのものを受け付ける
+  // 友だちリンクには公開鍵も入れて、相手の鍵を最初から正しく受け取れるようにする
+  function friendLink(baseUrl, id, name, pub) {
+    return `${baseUrl.split('#')[0]}#add=${id}${pub ? `&k=${pub}` : ''}&name=${encodeURIComponent(name || '')}`;
+  }
+
+  // 貼り付け用の友だちコード（ID と公開鍵をつないだもの）
+  function friendCode(id, pub) {
+    return pub ? `${id}.${pub}` : id;
+  }
+
+  // 友だちリンク・友だちコード・ID のどれでも受け付ける
   function parseFriendInput(text) {
     const s = String(text || '').trim();
-    if (isId(s)) return { id: s, name: '' };
+    if (isId(s)) return { id: s, name: '', pub: '' };
+    const dot = s.indexOf('.');
+    if (dot > 0 && !s.includes('#') && isId(s.slice(0, dot)) && isPub(s.slice(dot + 1))) {
+      return { id: s.slice(0, dot), name: '', pub: s.slice(dot + 1) };
+    }
     const hash = s.includes('#') ? s.slice(s.indexOf('#') + 1) : s;
     const params = new URLSearchParams(hash);
     const id = params.get('add');
     if (!isId(id)) return null;
-    return { id, name: cleanText(params.get('name') || '') };
+    const pub = params.get('k') || '';
+    return { id, name: cleanText(params.get('name') || ''), pub: isPub(pub) ? pub : '' };
   }
 
   function cleanText(v) {
@@ -137,7 +157,8 @@
         return m ? Object.assign(base, { m }) : null;
       }
       case 'del':
-        return typeof d.id === 'string' && d.id.length <= 40 ? Object.assign(base, { id: d.id }) : null;
+        return typeof d.id === 'string' && d.id.length <= 40
+          ? Object.assign(base, { id: d.id, at: Number.isFinite(d.at) ? d.at : 0 }) : null;
       case 'ack':
         return Array.isArray(d.keys)
           ? Object.assign(base, { keys: d.keys.filter((k) => typeof k === 'string' && k.length <= 80).slice(0, 200) })
@@ -196,10 +217,136 @@
       x.mySets === local.mySets && x.oppSets === local.oppSets) || null;
   }
 
+  // 端末に保存する試合記録を検証してきれいにする（インポートや保存データの改ざん対策）。不正なら null
+  function sanitizeMatch(m) {
+    if (!m || typeof m !== 'object' || typeof m.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(m.id)) return null;
+    if (![3, 5, 7].includes(m.bestOf) || !S.isValidResult(m.bestOf, m.mySets, m.oppSets)) return null;
+    const out = {
+      id: m.id,
+      date: typeof m.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(m.date) ? m.date : '',
+      opponent: cleanText(m.opponent),
+      event: cleanText(m.event),
+      bestOf: m.bestOf,
+      mode: m.mode === 'detail' ? 'detail' : 'simple',
+      mySets: m.mySets,
+      oppSets: m.oppSets,
+      memo: typeof m.memo === 'string' ? m.memo.slice(0, 2000) : '',
+      createdAt: Number.isFinite(m.createdAt) ? m.createdAt : 0,
+    };
+    if (Number.isFinite(m.updatedAt)) out.updatedAt = m.updatedAt;
+    if (!out.opponent) return null;
+    if (out.mode === 'detail') {
+      const okRally = typeof m.rally === 'string' && /^[mo]{1,2000}$/.test(m.rally) && (m.firstServer === 'me' || m.firstServer === 'opp');
+      const c = okRally && S.computeMatch(m.bestOf, m.firstServer, m.rally);
+      if (c && c.finished && c.mySets === m.mySets && c.oppSets === m.oppSets) {
+        out.firstServer = m.firstServer;
+        out.rally = m.rally;
+        out.games = c.games.map((g) => ({ me: g.me, opp: g.opp }));
+      } else {
+        out.mode = 'simple';
+      }
+    }
+    if (isId(m.opponentId)) out.opponentId = m.opponentId;
+    const ref = (r) => r && typeof r === 'object' && isId(r.from) && typeof r.id === 'string' && r.id.length <= 40;
+    if (ref(m.received)) out.received = { from: m.received.from, id: m.received.id, rev: Number.isFinite(m.received.rev) ? m.received.rev : 0 };
+    if (ref(m.remote)) out.remote = { from: m.remote.from, id: m.remote.id };
+    return out;
+  }
+
+  // ---------- 暗号 ----------
+
+  function subtle() {
+    return globalThis.crypto.subtle;
+  }
+
+  function toB64u(bytes) {
+    let bin = '';
+    for (const b of new Uint8Array(bytes)) bin += String.fromCharCode(b);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function fromB64u(s) {
+    const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4));
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  }
+
+  const ECDH = { name: 'ECDH', namedCurve: 'P-256' };
+
+  // 端末の鍵ペアを作る。pub は公開してよい、priv はこの端末だけに保存する
+  async function generateKeys() {
+    const kp = await subtle().generateKey(ECDH, true, ['deriveKey']);
+    return {
+      pub: toB64u(await subtle().exportKey('raw', kp.publicKey)),
+      priv: await subtle().exportKey('jwk', kp.privateKey),
+    };
+  }
+
+  // 自分の秘密鍵と相手の公開鍵から、2人だけが作れる共通鍵を作る
+  async function pairKey(privJwk, pub) {
+    const priv = await subtle().importKey('jwk', privJwk, ECDH, false, ['deriveKey']);
+    const peer = await subtle().importKey('raw', fromB64u(pub), ECDH, false, []);
+    return subtle().deriveKey({ name: 'ECDH', public: peer }, priv, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+
+  // 送信者→受信者の向きも認証に含めて、自分の送ったものを送り返される攻撃を防ぐ
+  function aad(from, to) {
+    return new TextEncoder().encode(`ttrec:${from}>${to}`);
+  }
+
+  async function seal(key, from, to, text) {
+    const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+    const ct = await subtle().encrypt({ name: 'AES-GCM', iv, additionalData: aad(from, to) }, key, new TextEncoder().encode(text));
+    return JSON.stringify({ v: 2, from, iv: toB64u(iv), ct: toB64u(ct) });
+  }
+
+  // 復号できなければ（鍵が違う・改ざん・なりすまし）null
+  async function open(key, from, to, env) {
+    try {
+      const pt = await subtle().decrypt({ name: 'AES-GCM', iv: fromB64u(env.iv), additionalData: aad(from, to) }, key, fromB64u(env.ct));
+      return new TextDecoder().decode(pt);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // 友だち申請だけは相手の鍵をまだ知らないので暗号化せずに送る（公開鍵と名前だけ）
+  function helloEnvelope(from, name, pub) {
+    return JSON.stringify({ v: 2, t: 'hello', from, name: cleanText(name), pub });
+  }
+
+  // 郵便受けから取り出した文字列の外側を読む
+  function parseEnvelope(text) {
+    let d;
+    try {
+      d = JSON.parse(text);
+    } catch (e) {
+      return null;
+    }
+    if (!d || typeof d !== 'object' || !isId(d.from)) return null;
+    if (d.v === 2 && d.t === 'hello') {
+      return isPub(d.pub) ? { kind: 'hello', from: d.from, name: cleanText(d.name), pub: d.pub } : null;
+    }
+    if (d.v === 2) {
+      return typeof d.iv === 'string' && typeof d.ct === 'string' && d.iv.length < 40 && d.ct.length < 8000
+        ? { kind: 'sealed', from: d.from, iv: d.iv, ct: d.ct } : null;
+    }
+    if (d.v === VERSION) return { kind: 'legacy', from: d.from, text };
+    return null;
+  }
+
   return {
     VERSION,
     isId,
+    isPub,
     newId,
+    friendCode,
+    sanitizeMatch,
+    generateKeys,
+    pairKey,
+    seal,
+    open,
+    helloEnvelope,
+    parseEnvelope,
     topicFor,
     friendLink,
     parseFriendInput,

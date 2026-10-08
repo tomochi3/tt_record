@@ -474,3 +474,11 @@ body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
 .h2h-bar { height: 8px; border-radius: 999px; background: var(--lose-bg); overflow: hidden; margin-top: 10px; }
 .h2h-bar span { display: block; height: 100%; background: var(--win); }
 .list-title { font-size: 15px; margin: 18px 4px 8px; }
+
+/* ---- 友だち申請 ---- */
+.request-banner {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--card); border: 1px solid var(--primary); border-radius: 12px;
+  padding: 10px 12px; margin-bottom: 12px;
+}
+.request-banner .rb-text { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; }

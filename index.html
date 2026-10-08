@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f6feb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>卓球戦績メモ</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="title">卓球戦績メモ</h1>
+  </header>
+
+  <main id="main" class="main"></main>
+
+  <nav class="tabbar" id="tabbar">
+    <button type="button" data-action="nav" data-view="list"><span class="tab-icon">📋</span>履歴</button>
+    <button type="button" data-action="nav" data-view="new"><span class="tab-icon">＋</span>記録</button>
+    <button type="button" data-action="nav" data-view="stats"><span class="tab-icon">📊</span>成績</button>
+    <button type="button" data-action="nav" data-view="settings"><span class="tab-icon">⚙</span>設定</button>
+  </nav>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/scoring.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

@@ -406,3 +406,16 @@ body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
   .pad { min-height: 52vh; }
   .pad-score { font-size: 64px; }
 }
+
+/* ---- 対戦相手の候補 ---- */
+.form label.with-suggest { margin-bottom: 8px; }
+.opp-suggest { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.opp-suggest:empty { display: none; }
+.opp-chip {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  min-height: 36px; padding: 6px 12px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--chip); color: var(--text);
+  font-size: 14px; font-weight: 600;
+}
+.opp-chip small { font-size: 11px; font-weight: 400; color: var(--muted); }

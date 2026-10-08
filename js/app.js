@@ -94,6 +94,35 @@
     return [...seen.keys()];
   }
 
+  // カタカナ→ひらがな・大文字→小文字にそろえて、読みの表記ゆれでも候補に出す
+  function normalize(s) {
+    return String(s || '').trim().toLowerCase()
+      .replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
+  }
+
+  // 過去に記録した対戦相手を、対戦回数が多い順（同数なら最近の順）に返す
+  function opponentSuggestions(query, limit) {
+    const stats = new Map();
+    for (const m of sortedMatches()) {
+      const name = (m.opponent || '').trim();
+      if (!name) continue;
+      const s = stats.get(name) || { name, n: 0, w: 0 };
+      s.n++;
+      if (m.mySets > m.oppSets) s.w++;
+      stats.set(name, s);
+    }
+    const q = normalize(query);
+    return [...stats.values()]
+      .filter((s) => !q || (normalize(s.name).includes(q) && normalize(s.name) !== q))
+      .sort((a, b) => b.n - a.n)
+      .slice(0, limit || 8);
+  }
+
+  function opponentChips(query) {
+    return opponentSuggestions(query).map((s) =>
+      `<button type="button" class="opp-chip" data-action="pick-opp" data-name="${esc(s.name)}">${esc(s.name)}<small>${s.w}勝${s.n - s.w}敗</small></button>`).join('');
+  }
+
   let toastTimer = null;
   function toast(msg) {
     const el = document.getElementById('toast');
@@ -259,8 +288,8 @@
 
     html += `<div class="card form">
       <label>日付<input type="date" data-field="date" value="${esc(d.date)}"></label>
-      <label>対戦相手<input type="text" data-field="opponent" list="dl-opp" placeholder="例: 山田 太郎" value="${esc(d.opponent)}" autocomplete="off"></label>
-      ${datalist('dl-opp', uniqueValues('opponent'))}
+      <label class="with-suggest">対戦相手<input type="text" data-field="opponent" placeholder="例: 山田 太郎" value="${esc(d.opponent)}" autocomplete="off"></label>
+      <div class="opp-suggest" id="oppSuggest">${opponentChips(d.opponent)}</div>
       <label>大会・練習名 <span class="opt">任意</span><input type="text" data-field="event" list="dl-event" placeholder="例: 市民大会 / 練習試合" value="${esc(d.event)}" autocomplete="off"></label>
       ${datalist('dl-event', uniqueValues('event'))}
       <div class="field"><span class="label">試合形式</span>
@@ -503,7 +532,10 @@
 
   function afterRender() {
     for (const el of main.querySelectorAll('[data-field]')) {
-      el.addEventListener('input', () => { draft[el.dataset.field] = el.value; });
+      el.addEventListener('input', () => {
+        draft[el.dataset.field] = el.value;
+        if (el.dataset.field === 'opponent') document.getElementById('oppSuggest').innerHTML = opponentChips(el.value);
+      });
     }
     const search = document.getElementById('listSearch');
     if (search) {
@@ -691,6 +723,13 @@
         }
         draft[k] = v;
         render();
+        break;
+      }
+      case 'pick-opp': {
+        draft.opponent = t.dataset.name;
+        const input = main.querySelector('[data-field="opponent"]');
+        input.value = draft.opponent;
+        document.getElementById('oppSuggest').innerHTML = opponentChips(draft.opponent);
         break;
       }
       case 'pick-result':

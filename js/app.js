@@ -165,7 +165,7 @@
     if (id === db.settings.myId) return null;
     let f = friendById(id);
     if (f) return f;
-    f = { id, name: uniqueFriendName(name), addedAt: Date.now() };
+    f = { id, name: uniqueFriendName(name), remoteName: (name || '').trim(), addedAt: Date.now() };
     db.friends.push(f);
     return f;
   }
@@ -182,6 +182,27 @@
 
   function queueHello(to) {
     enqueue(to, `h:${db.settings.myId}`, 'hello', { t: 'hello' });
+  }
+
+  // 自分の名前が変わったことを全ての友だちに知らせる（古い知らせは新しいものに置き換える）
+  function queueName() {
+    const at = db.settings.nameAt || Date.now();
+    for (const f of db.friends) enqueue(f.id, `n:${db.settings.myId}:${at}`, 'name', { t: 'name', at });
+  }
+
+  // 友だちの名前を、本人が設定した最新の名前に合わせる（自分で別名を付けている場合はそちらを優先）
+  function updateFriendName(friend, name, at) {
+    if (at <= (friend.nameAt || 0)) return false;
+    friend.nameAt = at;
+    friend.remoteName = name;
+    if (friend.custom) return false;
+    const next = uniqueFriendName(name, friend.id);
+    if (next === friend.name) return false;
+    const prev = friend.name;
+    friend.name = next;
+    for (const m of db.matches) if (m.opponentId === friend.id) m.opponent = next;
+    toast(`${prev}さんの名前が「${next}」に変わりました`);
+    return true;
   }
 
   function queueMatch(m) {
@@ -226,6 +247,10 @@
     }
     const friend = friendById(msg.from);
     if (!friend) return null;
+    if (msg.t === 'name') {
+      updateFriendName(friend, msg.name, msg.at);
+      return msg.key;
+    }
     if (msg.t === 'ack') {
       db.outbox = db.outbox.filter((o) => !(o.to === msg.from && msg.keys.includes(o.key)));
       return null;
@@ -851,7 +876,7 @@
         const w = ms.filter((m) => m.mySets > m.oppSets).length;
         const waiting = db.outbox.filter((o) => o.to === f.id).length;
         html += `<li>
-          <div class="f-main">${opponentLink(f.name, `<b>🔗 ${esc(f.name)}</b>`)}<span class="muted small">${ms.length ? `${w}勝${ms.length - w}敗` : '対戦なし'}${waiting ? ` ・ 送信待ち${waiting}件` : ''}</span></div>
+          <div class="f-main">${opponentLink(f.name, `<b>🔗 ${esc(f.name)}</b>`)}<span class="muted small">${ms.length ? `${w}勝${ms.length - w}敗` : '対戦なし'}${waiting ? ` ・ 送信待ち${waiting}件` : ''}${f.custom && f.remoteName && f.remoteName !== f.name ? ` ・ 本人の名前: ${esc(f.remoteName)}` : ''}</span></div>
           <button type="button" class="btn small-btn" data-action="friend-rename" data-id="${esc(f.id)}">名前</button>
           <button type="button" class="btn small-btn danger" data-action="friend-remove" data-id="${esc(f.id)}">解除</button>
         </li>`;
@@ -916,9 +941,16 @@
     const name = document.getElementById('myName');
     if (name) {
       name.addEventListener('change', () => {
-        db.settings.myName = name.value.trim() || '自分';
+        const next = name.value.trim() || '自分';
+        const changed = next !== db.settings.myName;
+        db.settings.myName = next;
+        if (changed) {
+          db.settings.nameAt = Date.now();
+          queueName();
+        }
         saveDb();
-        toast('保存しました');
+        toast(changed && db.friends.length ? '保存しました。友だちのアプリにも反映されます' : '保存しました');
+        if (changed && db.friends.length) sync();
         // QRコードとリンクに名前が入っているので描き直す
         if (view === 'friends') render();
       });
@@ -1219,9 +1251,15 @@
       }
       case 'friend-rename': {
         const f = friendById(t.dataset.id);
-        const name = f && prompt('表示名を変更', f.name);
-        if (!name || !name.trim()) break;
-        f.name = uniqueFriendName(name, f.id);
+        const name = f && prompt('表示名を変更（空欄にすると相手が設定した名前に戻します）', f.name);
+        if (name === null || name === undefined || !f) break;
+        if (name.trim()) {
+          f.name = uniqueFriendName(name, f.id);
+          f.custom = true;
+        } else {
+          f.custom = false;
+          f.name = uniqueFriendName(f.remoteName || f.name, f.id);
+        }
         // この友だちとの試合の相手名もそろえる
         for (const m of db.matches) if (m.opponentId === f.id) m.opponent = f.name;
         saveDb();

@@ -129,6 +129,9 @@
     switch (d.t) {
       case 'hello':
         return base;
+      case 'name':
+        // 名前の変更通知。古い通知で新しい名前を上書きしないよう、変更時刻も送る
+        return base.name && Number.isFinite(d.at) ? Object.assign(base, { at: d.at }) : null;
       case 'match': {
         const m = validMatch(d.m);
         return m ? Object.assign(base, { m }) : null;

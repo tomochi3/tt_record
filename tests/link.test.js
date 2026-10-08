@@ -20,6 +20,15 @@ test('parseFriendInput: リンクとIDの両方を受け付ける', () => {
   assert.equal(L.parseFriendInput('こんにちは'), null);
 });
 
+test('decode: 名前の変更通知は変更時刻つきのものだけ受け付ける', () => {
+  const d = L.decode(L.encode({ t: 'name', from: A, name: '山田 花子', key: 'n:1', at: 123 }));
+  assert.equal(d.t, 'name');
+  assert.equal(d.name, '山田 花子');
+  assert.equal(d.at, 123);
+  assert.equal(L.decode(L.encode({ t: 'name', from: A, name: '山田' })), null);
+  assert.equal(L.decode(L.encode({ t: 'name', from: A, name: '', at: 1 })), null);
+});
+
 test('encode/decode: 試合を送ってメモは含めない', () => {
   const m = { id: 'abc123', date: '2026-10-08', event: '市民大会', bestOf: 5, mode: 'simple', mySets: 3, oppSets: 1, memo: '秘密', createdAt: 5 };
   const text = L.encode({ t: 'match', from: A, name: '山田', m: L.matchPayload(m) });

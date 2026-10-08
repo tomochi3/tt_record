@@ -419,3 +419,22 @@ body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
   font-size: 14px; font-weight: 600;
 }
 .opp-chip small { font-size: 11px; font-weight: 400; color: var(--muted); }
+
+/* ---- 友だち連携 ---- */
+.link-hint { flex-basis: 100%; margin: 2px 0 0; font-size: 13px; color: var(--primary); font-weight: 600; }
+.chip.link { background: transparent; padding: 0 2px; }
+.link-status { margin-top: 8px; font-size: 13px; color: var(--primary); font-weight: 600; }
+.notice { border-color: var(--primary); }
+.notice p { margin: 0 0 12px; }
+.warn { color: var(--lose); }
+.qr { background: #fff; border-radius: 12px; padding: 8px; width: min(240px, 70vw); margin: 4px auto 12px; }
+.qr svg, .qr img { display: block; width: 100%; height: auto; }
+.id-line { margin: 10px 0 0; word-break: break-all; }
+.id-line code { font-size: 12px; }
+.friend-list { list-style: none; margin: 0; padding: 0; }
+.friend-list li { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.friend-list li:last-child { border-bottom: 0; }
+.f-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.f-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn.small-btn { min-height: 36px; padding: 6px 12px; font-size: 14px; }
+.card h3 + .muted { margin-top: 0; }

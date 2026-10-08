@@ -1,0 +1,73 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const L = require('../js/link.js');
+
+const A = 'AAAAAAAAAAAAAAAAAAAA';
+const B = 'BBBBBBBBBBBBBBBBBBBB';
+
+test('newId: 20文字の英数字', () => {
+  const id = L.newId((n) => Uint8Array.from({ length: n }, (_, i) => i * 7));
+  assert.equal(id.length, 20);
+  assert.ok(L.isId(id));
+});
+
+test('parseFriendInput: リンクとIDの両方を受け付ける', () => {
+  const link = L.friendLink('https://example.com/tt_record/#old', A, '山田 太郎');
+  assert.deepEqual(L.parseFriendInput(link), { id: A, name: '山田 太郎' });
+  assert.deepEqual(L.parseFriendInput(`  ${A} `), { id: A, name: '' });
+  assert.equal(L.parseFriendInput('https://example.com/#add=short'), null);
+  assert.equal(L.parseFriendInput('こんにちは'), null);
+});
+
+test('encode/decode: 試合を送ってメモは含めない', () => {
+  const m = { id: 'abc123', date: '2026-10-08', event: '市民大会', bestOf: 5, mode: 'simple', mySets: 3, oppSets: 1, memo: '秘密', createdAt: 5 };
+  const text = L.encode({ t: 'match', from: A, name: '山田', m: L.matchPayload(m) });
+  assert.ok(!text.includes('秘密'));
+  const d = L.decode(text);
+  assert.equal(d.t, 'match');
+  assert.equal(d.from, A);
+  assert.equal(d.m.mySets, 3);
+  assert.equal(d.m.rev, 5);
+});
+
+test('decode: 不正なメッセージは捨てる', () => {
+  assert.equal(L.decode('not json'), null);
+  assert.equal(L.decode(JSON.stringify({ v: 1, t: 'hello', from: 'bad' })), null);
+  assert.equal(L.decode(JSON.stringify({ v: 1, t: 'match', from: A, m: { id: 'x', date: '2026-01-01', bestOf: 5, mySets: 3, oppSets: 3 } })), null);
+  assert.equal(L.decode(JSON.stringify({ v: 1, t: 'evil', from: A })), null);
+  // 1点ごとの記録が結果と食い違う場合は結果だけ残す
+  const d = L.decode(JSON.stringify({ v: 1, t: 'match', from: A, m: { id: 'x', date: '2026-01-01', bestOf: 3, mode: 'detail', mySets: 2, oppSets: 0, firstServer: 'me', rally: 'o'.repeat(22) } }));
+  assert.equal(d.m.rally, undefined);
+});
+
+test('encode: 長すぎる試合は1点ごとの記録を省く', () => {
+  const rally = 'mo'.repeat(1000) + 'mm';
+  const m = { id: 'long', date: '2026-10-08', bestOf: 3, mode: 'detail', mySets: 2, oppSets: 0, firstServer: 'me', rally };
+  const text = L.encode({ t: 'match', from: A, name: 'x', m });
+  assert.ok(text.length < 3900);
+  assert.equal(L.decode(text).m.mySets, 2);
+});
+
+test('toLocalMatch: 相手の記録を自分視点に反転する', () => {
+  const rally = 'm'.repeat(11) + 'o'.repeat(11) + 'm'.repeat(11);
+  const d = L.decode(L.encode({ t: 'match', from: A, name: '山田', m: { id: 'm1', date: '2026-10-08', bestOf: 3, mode: 'detail', mySets: 2, oppSets: 1, firstServer: 'me', rally } }));
+  const local = L.toLocalMatch(d.m, A, '山田', 1);
+  assert.equal(local.id, L.receivedId(A, 'm1'));
+  assert.equal(local.opponent, '山田');
+  assert.equal(local.opponentId, A);
+  assert.equal(local.mySets, 1);
+  assert.equal(local.oppSets, 2);
+  assert.equal(local.firstServer, 'opp');
+  assert.ok(local.rally.startsWith('ooooooooooo'));
+  assert.deepEqual(local.games, [{ me: 0, opp: 11 }, { me: 11, opp: 0 }, { me: 0, opp: 11 }]);
+});
+
+test('findDuplicate: 自分でも記録した同じ試合を見つける', () => {
+  const own = { id: 'x', opponentId: A, date: '2026-10-08', mySets: 1, oppSets: 3 };
+  const other = { id: 'y', opponentId: B, date: '2026-10-08', mySets: 1, oppSets: 3 };
+  const local = { opponentId: A, date: '2026-10-08', mySets: 1, oppSets: 3 };
+  assert.equal(L.findDuplicate([other, own], local), own);
+  assert.equal(L.findDuplicate([Object.assign({}, own, { remote: { from: A, id: 'z' } })], local), null);
+  assert.equal(L.findDuplicate([Object.assign({}, own, { mySets: 3, oppSets: 1 })], local), null);
+});

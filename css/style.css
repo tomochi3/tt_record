@@ -462,3 +462,15 @@ body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
 .f-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .btn.small-btn { min-height: 36px; padding: 6px 12px; font-size: 14px; }
 .card h3 + .muted { margin-top: 0; }
+
+/* ---- 相手ごとの成績 ---- */
+.link-btn { border: 0; background: none; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.table .link-btn { color: var(--primary); font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mh-opp .link-btn { color: var(--primary); }
+.f-main .link-btn { display: flex; min-width: 0; }
+.h2h { text-align: center; }
+.h2h-name { font-size: 18px; font-weight: 700; }
+.h2h-rate { font-size: 44px; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.h2h-bar { height: 8px; border-radius: 999px; background: var(--lose-bg); overflow: hidden; margin-top: 10px; }
+.h2h-bar span { display: block; height: 100%; background: var(--win); }
+.list-title { font-size: 15px; margin: 18px 4px 8px; }

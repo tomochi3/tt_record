@@ -388,10 +388,11 @@
   const main = document.getElementById('main');
 
   function render() {
-    const views = { list: viewList, new: viewForm, edit: viewForm, live: viewLive, match: viewMatch, stats: viewStats, friends: viewFriends, settings: viewSettings };
+    const views = { list: viewList, new: viewForm, edit: viewForm, live: viewLive, match: viewMatch, stats: viewStats, opponent: viewOpponent, friends: viewFriends, settings: viewSettings };
     main.innerHTML = (views[view] || viewList)();
     document.body.classList.toggle('is-live', view === 'live');
-    const activeTab = view === 'edit' || view === 'live' ? 'new' : view === 'match' ? 'list' : view;
+    const activeTab = view === 'edit' || view === 'live' ? 'new' : view === 'match' ? 'list'
+      : view === 'opponent' ? (params.from || 'stats') : view;
     for (const b of document.querySelectorAll('#tabbar button')) {
       b.classList.toggle('active', b.dataset.view === activeTab);
     }
@@ -447,7 +448,15 @@
         const [y, mm] = mo.split('-');
         html += `<li class="month">${y ? `${y}年${Number(mm)}月` : '日付なし'}</li>`;
       }
-      html += `<li><button type="button" class="match-item" data-action="open" data-id="${esc(m.id)}">
+      html += matchItem(m);
+    }
+    html += '</ul>';
+    if (!items.length) html += '<p class="empty">該当する試合がありません。</p>';
+    return html;
+  }
+
+  function matchItem(m) {
+    return `<li><button type="button" class="match-item" data-action="open" data-id="${esc(m.id)}">
         ${resultBadge(m)}
         <span class="score">${m.mySets}-${m.oppSets}</span>
         <span class="who">
@@ -456,10 +465,6 @@
         </span>
         <span class="meta"><span>${m.opponentId ? '<span class="chip link">🔗</span>' : ''}${m.mode === 'detail' ? '<span class="chip">詳細</span>' : ''}</span><span class="date">${fmtDate(m.date)}</span></span>
       </button></li>`;
-    }
-    html += '</ul>';
-    if (!items.length) html += '<p class="empty">該当する試合がありません。</p>';
-    return html;
   }
 
   function segmented(name, options, value) {
@@ -593,11 +598,11 @@
     const m = db.matches.find((x) => x.id === params.id);
     if (!m) return viewList();
     const win = m.mySets > m.oppSets;
-    let html = `<button type="button" class="back" data-action="nav" data-view="list">‹ 履歴</button>
+    let html = `<button type="button" class="back" data-action="back">‹ ${params.back ? 'vs ' + esc(params.back.params.name) : '履歴'}</button>
       <section class="card match-head ${win ? 'win' : 'lose'}">
         <div class="mh-result">${win ? '勝ち' : '負け'}</div>
         <div class="mh-score">${m.mySets} - ${m.oppSets}</div>
-        <div class="mh-opp">vs ${esc(m.opponent)}</div>
+        <div class="mh-opp">${opponentLink(m.opponent, `vs ${esc(m.opponent)} ›`)}</div>
         <div class="muted">${esc(m.date)}${m.event ? ` ・ ${esc(m.event)}` : ''} ・ ${m.bestOf}ゲームマッチ ・ ${m.mode === 'detail' ? '詳細記録' : 'セット数のみ'}</div>
         ${linkStatus(m)}
       </section>`;
@@ -686,7 +691,16 @@
       ${fullGame.length ? `<p class="muted small">フルゲームの試合: ${fullWins}勝 ${fullGame.length - fullWins}敗</p>` : ''}
     </section>`;
 
-    // 詳細モードで記録した試合の集計
+    html += rallyCard(ms);
+
+    html += groupTable('対戦相手別', ms, 'opponent');
+    if (ms.some((m) => m.event)) html += groupTable('大会・練習別', ms, 'event');
+    return html;
+  }
+
+  // 詳細モードで記録した試合の集計
+  function rallyCard(ms) {
+    let html = '';
     const detail = ms.filter((m) => m.mode === 'detail' && m.rally);
     if (detail.length) {
       const agg = { serveWon: 0, serveTotal: 0, receiveWon: 0, receiveTotal: 0, pointsWon: 0, pointsTotal: 0, deuceGames: 0, deuceWon: 0 };
@@ -701,9 +715,51 @@
         <dt>ジュースの勝敗</dt><dd>${agg.deuceGames ? `${agg.deuceWon}勝 ${agg.deuceGames - agg.deuceWon}敗` : '—'}</dd>
       </dl></section>`;
     }
+    return html;
+  }
 
-    html += groupTable('対戦相手別', ms, 'opponent');
-    if (ms.some((m) => m.event)) html += groupTable('大会・練習別', ms, 'event');
+  function opponentLink(name, inner) {
+    return `<button type="button" class="link-btn" data-action="opponent" data-name="${esc(name)}">${inner}</button>`;
+  }
+
+  // 相手ごとの対戦成績
+  function viewOpponent() {
+    const name = params.name || '';
+    const ms = sortedMatches().filter((m) => (m.opponent || '').trim() === name);
+    const friend = friendByName(name);
+    let html = `<button type="button" class="back" data-action="back">‹ 戻る</button>`;
+    if (!ms.length) {
+      return html + `<h2 class="view-title">${friend ? '🔗 ' : ''}${esc(name)}</h2><p class="empty">まだ対戦記録がありません。</p>`;
+    }
+    const w = ms.filter((m) => m.mySets > m.oppSets).length;
+    const sw = ms.reduce((a, m) => a + m.mySets, 0);
+    const sl = ms.reduce((a, m) => a + m.oppSets, 0);
+    const full = ms.filter((m) => m.mySets + m.oppSets === m.bestOf);
+    const fullW = full.filter((m) => m.mySets > m.oppSets).length;
+    const recent = ms.slice(0, 10).reverse();
+    let streak = 0;
+    for (const m of ms) {
+      if ((m.mySets > m.oppSets) === (ms[0].mySets > ms[0].oppSets)) streak++;
+      else break;
+    }
+
+    html += `<section class="card h2h">
+        <div class="h2h-name">vs ${friend ? '🔗 ' : ''}${esc(name)}</div>
+        <div class="h2h-rate">${pct(w, ms.length)}</div>
+        <div class="muted">勝率（${w}勝 ${ms.length - w}敗）</div>
+        <div class="h2h-bar" aria-hidden="true"><span style="width:${(w / ms.length) * 100}%"></span></div>
+      </section>
+      <div class="tiles">
+        <div class="tile"><div class="t-val">${ms.length}</div><div class="t-lbl">対戦数</div></div>
+        <div class="tile"><div class="t-val">${pct(sw, sw + sl)}</div><div class="t-lbl">ゲーム取得率（${sw}-${sl}）</div></div>
+        <div class="tile"><div class="t-val">${full.length ? `${fullW}-${full.length - fullW}` : '—'}</div><div class="t-lbl">フルゲーム</div></div>
+        <div class="tile"><div class="t-val">${streak}${ms[0].mySets > ms[0].oppSets ? '連勝' : '連敗'}</div><div class="t-lbl">現在</div></div>
+      </div>
+      <section class="card"><h3>直近${recent.length}試合 <span class="muted small">（左が古い）</span></h3>
+        <div class="form-dots">${recent.map((m) => `<span class="fd ${m.mySets > m.oppSets ? 'w' : 'l'}" title="${esc(m.date)} ${m.mySets}-${m.oppSets}">${m.mySets > m.oppSets ? '○' : '●'}</span>`).join('')}</div>
+      </section>`;
+    html += rallyCard(ms);
+    html += `<h3 class="list-title">対戦履歴</h3><ul class="match-list">${ms.map(matchItem).join('')}</ul>`;
     return html;
   }
 
@@ -720,8 +776,8 @@
     }
     const rows = [...groups.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0], 'ja'));
     return `<section class="card"><h3>${title}</h3><table class="table">
-      <thead><tr><th>${key === 'opponent' ? '相手' : '名前'}</th><th>勝-敗</th><th>勝率</th><th>ゲーム</th></tr></thead>
-      <tbody>${rows.map(([k, g]) => `<tr><td>${esc(k)}</td><td>${g.w}-${g.n - g.w}</td><td>${pct(g.w, g.n)}</td><td>${g.sw}-${g.sl}</td></tr>`).join('')}</tbody>
+      <thead><tr><th>${key === 'opponent' ? '相手（タップで詳細）' : '名前'}</th><th>勝-敗</th><th>勝率</th><th>ゲーム</th></tr></thead>
+      <tbody>${rows.map(([k, g]) => `<tr><td>${key === 'opponent' && k !== '（未入力）' ? opponentLink(k, esc(k)) : esc(k)}</td><td>${g.w}-${g.n - g.w}</td><td>${pct(g.w, g.n)}</td><td>${g.sw}-${g.sl}</td></tr>`).join('')}</tbody>
     </table></section>`;
   }
 
@@ -795,7 +851,7 @@
         const w = ms.filter((m) => m.mySets > m.oppSets).length;
         const waiting = db.outbox.filter((o) => o.to === f.id).length;
         html += `<li>
-          <div class="f-main"><b>🔗 ${esc(f.name)}</b><span class="muted small">${ms.length ? `${w}勝${ms.length - w}敗` : '対戦なし'}${waiting ? ` ・ 送信待ち${waiting}件` : ''}</span></div>
+          <div class="f-main">${opponentLink(f.name, `<b>🔗 ${esc(f.name)}</b>`)}<span class="muted small">${ms.length ? `${w}勝${ms.length - w}敗` : '対戦なし'}${waiting ? ` ・ 送信待ち${waiting}件` : ''}</span></div>
           <button type="button" class="btn small-btn" data-action="friend-rename" data-id="${esc(f.id)}">名前</button>
           <button type="button" class="btn small-btn danger" data-action="friend-remove" data-id="${esc(f.id)}">解除</button>
         </li>`;
@@ -1050,7 +1106,14 @@
         go(t.dataset.view, { id: t.dataset.id });
         break;
       case 'open':
-        go('match', { id: t.dataset.id });
+        go('match', { id: t.dataset.id, back: view === 'opponent' ? { view, params } : null });
+        break;
+      case 'opponent':
+        go('opponent', { name: t.dataset.name, from: view === 'match' ? 'list' : view, back: { view, params } });
+        break;
+      case 'back':
+        if (params.back) go(params.back.view, params.back.params);
+        else go('list');
         break;
       case 'draft': {
         const k = t.dataset.key;

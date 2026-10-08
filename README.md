@@ -22,7 +22,16 @@ npm start        # http://localhost:8000 で起動（python3 の簡易サーバ�
 npm test         # スコア計算ロジックのテスト
 ```
 
-`index.html` をそのまま開いても動きます。GitHub Pages などの静的ホスティングにそのまま置けば、スマホのホーム画面に追加して使えます。
+`index.html` をそのまま開いても動きます。
+
+## GitHub Pages で公開
+
+`main` に push すると、GitHub Actions（`.github/workflows/pages.yml`）がテストを実行してから GitHub Pages にデプロイします。
+
+初回だけ、リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** にしてください。
+公開URLは `https://<ユーザー名>.github.io/tt_record/` です。スマホで開いて「ホーム画面に追加」するとアプリのように使えます。
+
+記録はブラウザごとに保存されるため、端末を変えるときは設定画面のエクスポート/インポートを使ってください。
 
 ## 構成
 

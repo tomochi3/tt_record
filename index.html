@@ -9,6 +9,13 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
+  <script>
+    // 画面が描かれる前にテーマ設定を反映する（ちらつき防止）
+    try {
+      var t = (JSON.parse(localStorage.getItem('ttrecord.v1') || '{}').settings || {}).theme;
+      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>

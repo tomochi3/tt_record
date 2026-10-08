@@ -331,6 +331,12 @@
     if (navigator.vibrate) navigator.vibrate(12);
   }
 
+  function applyTheme() {
+    const t = db.settings.theme;
+    if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    else delete document.documentElement.dataset.theme;
+  }
+
   function myName() {
     return db.settings.myName || '自分';
   }
@@ -811,6 +817,13 @@
     return `<h2 class="view-title">設定</h2>
       <div class="card form">
         <label>自分の名前（スコアボードに表示）<input type="text" id="myName" value="${esc(db.settings.myName)}" maxlength="20"></label>
+        <div class="field"><span class="label">画面の明るさ</span>
+          <div class="seg" role="radiogroup">${[['auto', '自動'], ['light', 'ライト'], ['dark', 'ダーク']].map(([v, l]) => {
+            const on = (db.settings.theme || 'auto') === v;
+            return `<button type="button" role="radio" aria-checked="${on}" class="${on ? 'on' : ''}" data-action="theme" data-value="${v}">${l}</button>`;
+          }).join('')}</div>
+          <p class="hint small muted">「自動」は端末のダークモード設定に合わせます。</p>
+        </div>
       </div>
       <div class="card">
         <h3>データ</h3>
@@ -1111,6 +1124,12 @@
       case 'export':
         exportData();
         break;
+      case 'theme':
+        db.settings.theme = t.dataset.value;
+        applyTheme();
+        saveDb();
+        render();
+        break;
       case 'friend-accept': {
         const p = params.pending;
         if (!p) break;
@@ -1206,6 +1225,7 @@
     if (document.visibilityState === 'visible') sync();
   }, POLL_MS);
 
+  applyTheme();
   if (!handleHash()) go(live ? 'live' : 'list');
   saveDb(); // 新しく作ったIDを保存しておく
   sync();

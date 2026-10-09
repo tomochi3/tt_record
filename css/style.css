@@ -526,8 +526,6 @@ body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
 }
 .treat-banner .go { margin-left: auto; color: var(--primary); }
 
-.history-btns { display: inline-flex; gap: 6px; }
-.history-btns .btn { min-height: 30px; padding: 4px 8px; font-size: 12px; }
 .sub-title { font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
 .treat-banner .tb-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tb-line { font-size: 13px; font-weight: 400; }

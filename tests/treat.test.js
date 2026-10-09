@@ -35,3 +35,11 @@ test('対象外の試合・別の相手は数えない。日付順に数える',
   assert.equal(T.decidedBy(ms, ms[0].id).winner, 'me');
   assert.equal(T.decidedBy(ms, ms[3].id), null);
 });
+
+test('roundOf: 試合が含まれる勝負の決着を返す', () => {
+  n = 0;
+  const ms = [m('山田', 3, 0, 2), m('山田', 1, 3, 2), m('山田', 3, 1, 2), m('山田', 3, 2, 2)];
+  assert.equal(T.roundOf(ms, ms[0].id).matchId, ms[2].id);
+  assert.equal(T.roundOf(ms, ms[1].id).winner, 'me');
+  assert.equal(T.roundOf(ms, ms[3].id), null);
+});

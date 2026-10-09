@@ -30,14 +30,17 @@
     for (const m of matches.filter((x) => isNeed(x.treat)).sort(chronological)) {
       const key = opponentKey(m);
       if (!key) continue;
-      const s = byOpp.get(key) || { me: 0, opp: 0, need: m.treat, decided: [] };
+      const s = byOpp.get(key) || { me: 0, opp: 0, need: m.treat, decided: [], current: [] };
       const winner = m.mySets > m.oppSets ? 'me' : 'opp';
       s.need = m.treat;
       s[winner]++;
+      s.current.push(m.id);
       if (s[winner] >= m.treat) {
-        s.decided.push({ matchId: m.id, date: m.date, winner, need: m.treat, me: s.me, opp: s.opp });
+        // matchIds: この勝負に含まれる試合（決着した試合を含む）
+        s.decided.push({ matchId: m.id, date: m.date, winner, need: m.treat, me: s.me, opp: s.opp, matchIds: s.current });
         s.me = 0;
         s.opp = 0;
+        s.current = [];
       }
       byOpp.set(key, s);
     }
@@ -53,5 +56,14 @@
     return null;
   }
 
-  return { NEEDS, isNeed, summarize, decidedBy };
+  // その試合が含まれる勝負の決着（まだ決着していなければ null）
+  function roundOf(matches, matchId) {
+    for (const s of summarize(matches).values()) {
+      const d = s.decided.find((x) => x.matchIds.includes(matchId));
+      if (d) return d;
+    }
+    return null;
+  }
+
+  return { NEEDS, isNeed, summarize, decidedBy, roundOf };
 });

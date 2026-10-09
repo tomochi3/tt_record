@@ -625,12 +625,25 @@
   }
 
   let toastTimer = null;
-  function toast(msg) {
+  // action を渡すと「元に戻す」「やり直す」ボタン付きで少し長めに表示する
+  function toast(msg, action) {
     const el = document.getElementById('toast');
-    el.textContent = msg;
+    el.textContent = '';
+    const text = document.createElement('span');
+    text.textContent = msg;
+    el.append(text);
+    if (action) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'toast-btn';
+      b.dataset.action = action === 'undo' ? 'history-undo' : 'history-redo';
+      b.textContent = action === 'undo' ? '元に戻す' : 'やり直す';
+      el.append(b);
+    }
+    el.classList.toggle('actionable', !!action);
     el.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove('show'), 2000);
+    toastTimer = setTimeout(() => el.classList.remove('show', 'actionable'), action ? 5000 : 2000);
   }
 
   function buzz() {
@@ -707,9 +720,76 @@
   function announceTreat(m) {
     if (!TR.isNeed(m.treat)) return false;
     const d = TR.decidedBy(db.matches, m.id);
-    if (!d) return false;
-    toast(`🍜 奢り決定: ${treatDecisionText(d, m.opponent)}`);
+    if (d) {
+      toast(`🍜 奢り決定: ${treatDecisionText(d, m.opponent)}`);
+      return true;
+    }
+    // まだ決まっていなければ途中経過を知らせる（例: 2勝で奢りのうち1勝目）
+    const s = TR.summarize(db.matches).get((m.opponent || '').trim());
+    if (!s) return false;
+    toast(`🍜 ${m.mySets > m.oppSets ? '勝ち' : '負け'}（${m.mySets}-${m.oppSets}）・ 奢り勝負 自分 ${s.me}勝 - 相手 ${s.opp}勝（${s.need}勝で奢り）`);
     return true;
+  }
+
+  // ---------- 元に戻す・やり直す（奢りメモの操作） ----------
+
+  const history = { undo: [], redo: [] };
+
+  function treatSnapshot() {
+    return JSON.stringify({ treats: db.treats, treat: db.settings.treat || null });
+  }
+
+  function applyTreatSnapshot(text) {
+    const v = JSON.parse(text);
+    db.treats = sanitizeTreats(v.treats);
+    if (v.treat) db.settings.treat = v.treat;
+    else delete db.settings.treat;
+  }
+
+  // 操作の前の状態を受け取り、履歴に積んで「元に戻す」付きで知らせる
+  function recordChange(label, before) {
+    history.undo.push({ label, before, after: treatSnapshot() });
+    if (history.undo.length > 50) history.undo.shift();
+    history.redo = [];
+    toast(label, 'undo');
+  }
+
+  function undoChange() {
+    const h = history.undo.pop();
+    if (!h) return toast('元に戻せる操作はありません');
+    applyTreatSnapshot(h.before);
+    history.redo.push(h);
+    saveDb();
+    render();
+    toast(`元に戻しました（${h.label}）`, 'redo');
+  }
+
+  function redoChange() {
+    const h = history.redo.pop();
+    if (!h) return toast('やり直せる操作はありません');
+    applyTreatSnapshot(h.after);
+    history.undo.push(h);
+    saveDb();
+    render();
+    toast(`やり直しました（${h.label}）`, 'undo');
+  }
+
+  function historyControls() {
+    return `<span class="history-btns">
+      <button type="button" class="btn small-btn" data-action="history-undo" ${history.undo.length ? '' : 'disabled'} aria-label="元に戻す">↶ 戻す</button>
+      <button type="button" class="btn small-btn" data-action="history-redo" ${history.redo.length ? '' : 'disabled'} aria-label="やり直す">↷ やり直す</button>
+    </span>`;
+  }
+
+  // まだ奢りが決まっていない途中経過（1勝以上ついている相手）
+  function treatsInProgress() {
+    const out = [];
+    for (const [name, s] of TR.summarize(db.matches)) if (s.me || s.opp) out.push({ name, me: s.me, opp: s.opp, need: s.need });
+    return out;
+  }
+
+  function progressLine(p) {
+    return `${p.name}さん：自分 ${p.me}勝 - 相手 ${p.opp}勝（${p.need}勝で奢り）`;
   }
 
   function myName() {
@@ -818,9 +898,13 @@
 
     let html = liveBanner();
     const owed = pendingTreats();
-    if (owed.length) {
+    const going = treatsInProgress();
+    if (owed.length || going.length) {
       const toMe = owed.filter((d) => d.winner === 'me').length;
-      html += `<button type="button" class="treat-banner" data-action="nav" data-view="stats">🍜 未済の奢り：${toMe ? `ご馳走になる ${toMe}回` : ''}${toMe && owed.length - toMe ? ' ・ ' : ''}${owed.length - toMe ? `奢る ${owed.length - toMe}回` : ''}<span class="go">確認 ›</span></button>`;
+      const lines = going.slice(0, 3).map((p) => `<span class="tb-line">${esc(progressLine(p))}</span>`);
+      if (going.length > 3) lines.push(`<span class="tb-line muted">ほか${going.length - 3}人</span>`);
+      if (owed.length) lines.push(`<span class="tb-line">未済：${toMe ? `ご馳走になる ${toMe}回` : ''}${toMe && owed.length - toMe ? ' ・ ' : ''}${owed.length - toMe ? `奢る ${owed.length - toMe}回` : ''}</span>`);
+      html += `<button type="button" class="treat-banner" data-action="nav" data-view="stats"><span class="tb-body"><b>🍜 奢り</b>${lines.join('')}</span><span class="go">確認 ›</span></button>`;
     }
     html += `<section class="card summary">
       <div><div class="big">${wins}<small>勝</small> ${all.length - wins}<small>敗</small></div><div class="muted">通算 ${all.length}試合</div></div>
@@ -1044,7 +1128,11 @@
   function treatStatus(m) {
     if (!TR.isNeed(m.treat)) return '';
     const d = TR.decidedBy(db.matches, m.id);
-    if (!d) return `<div class="treat-status">🍜 奢りの対象（${m.treat}勝で奢り）・ ${esc(treatProgressText(m.opponent))}</div>`;
+    if (!d) {
+      const round = TR.roundOf(db.matches, m.id);
+      if (round) return `<div class="treat-status">🍜 奢りの対象（${m.treat}勝で奢り）・ この勝負は ${fmtDate(round.date)} に ${round.me}-${round.opp} で決着：${esc(treatDecisionText(round, m.opponent))}</div>`;
+      return `<div class="treat-status">🍜 奢りの対象（${m.treat}勝で奢り）・ 勝負の途中：${esc(treatProgressText(m.opponent).replace(/^.*奢り勝負: /, ''))}</div>`;
+    }
     const done = db.treats[d.matchId] && db.treats[d.matchId].done;
     return `<div class="treat-status">🍜 この試合で決着：<b>${esc(treatDecisionText(d, m.opponent))}</b>
       <button type="button" class="btn small-btn ${done ? '' : 'primary'}" data-action="treat-done" data-id="${esc(d.matchId)}" aria-pressed="${!!done}">${done ? '済' : '未'}</button></div>`;
@@ -1057,7 +1145,7 @@
     const decided = s.decided.slice().reverse();
     const owedToMe = decided.filter((d) => d.winner === 'me' && !(db.treats[d.matchId] && db.treats[d.matchId].done)).length;
     const iOwe = decided.filter((d) => d.winner === 'opp' && !(db.treats[d.matchId] && db.treats[d.matchId].done)).length;
-    return `<section class="card treat-card"><h3>🍜 奢り</h3>
+    return `<section class="card treat-card"><div class="card-head"><h3>🍜 奢り</h3>${historyControls()}</div>
       <div class="treat-now">
         <div><span class="tn-val">${s.me}</span><span class="tn-lbl">自分の勝ち</span></div>
         <div class="tn-mid">${s.need}勝で奢り</div>
@@ -1071,9 +1159,21 @@
   // 未済の奢り（成績タブ用）
   function pendingTreatCard() {
     const list = pendingTreats();
-    if (!list.length) return '';
-    return `<section class="card treat-card"><h3>🍜 未済の奢り <span class="muted small">（${list.length}件）</span></h3>
-      <ul class="treat-list">${list.map((d) => treatItem(d, d.name)).join('')}</ul></section>`;
+    const going = treatsInProgress();
+    // 済にした奢りもすぐに消さず、最近の3件は残して「未」に戻せるようにする
+    const recentDone = [];
+    for (const [name, s] of TR.summarize(db.matches)) {
+      for (const d of s.decided) if (db.treats[d.matchId] && db.treats[d.matchId].done) recentDone.push(Object.assign({ name, at: db.treats[d.matchId].at }, d));
+    }
+    recentDone.sort((a, b) => b.at - a.at);
+    if (!list.length && !going.length && !recentDone.length) return '';
+    return `<section class="card treat-card"><div class="card-head"><h3>🍜 奢り</h3>${historyControls()}</div>
+      ${going.length ? `<h4 class="sub-title">勝負の途中</h4><ul class="opp-stats">${going.map((p) => `<li><button type="button" class="opp-row" data-action="opponent" data-name="${esc(p.name)}">
+        <span class="or-main"><span class="or-name">${esc(p.name)}</span><span class="or-sub">${p.need}勝で奢り</span></span>
+        <span class="or-rate">${p.me} - ${p.opp}</span><span class="or-go" aria-hidden="true">›</span></button></li>`).join('')}</ul>` : ''}
+      ${list.length ? `<h4 class="sub-title">未済の奢り（${list.length}件）</h4><ul class="treat-list">${list.map((d) => treatItem(d, d.name)).join('')}</ul>` : ''}
+      ${recentDone.length ? `<h4 class="sub-title">最近済んだ奢り</h4><ul class="treat-list">${recentDone.slice(0, 3).map((d) => treatItem(d, d.name)).join('')}</ul>` : ''}
+    </section>`;
   }
 
   function linkStatus(m) {
@@ -1668,19 +1768,31 @@
         break;
       case 'treat-done': {
         const id = t.dataset.id;
+        const before = treatSnapshot();
         if (db.treats[id]) delete db.treats[id];
         else db.treats[id] = { done: true, at: Date.now() };
         saveDb();
         render();
+        recordChange(db.treats[id] ? '奢りを「済」にしました' : '奢りを「未」に戻しました', before);
         break;
       }
       case 'treat-setting': {
-        const cur = db.settings.treat || { on: false, need: 1 };
+        const before = treatSnapshot();
+        const cur = Object.assign({ on: false, need: 1 }, db.settings.treat);
         if (t.dataset.key === 'on') cur.on = t.dataset.value === '1';
         if (t.dataset.key === 'need') cur.need = Number(t.dataset.value);
         db.settings.treat = { on: !!cur.on, need: TR.isNeed(cur.need) ? cur.need : 1 };
+        if (before === treatSnapshot()) break;
         saveDb();
         render();
+        recordChange(t.dataset.key === 'on' ? `奢りメモを${cur.on ? 'オン' : 'オフ'}にしました` : `「${cur.need}勝で奢り」にしました`, before);
+        break;
+      }
+      case 'history-undo':
+        undoChange();
+        break;
+      case 'history-redo': {
+        redoChange();
         break;
       }
       case 'pick-result':
@@ -1875,6 +1987,13 @@
   }
 
   window.addEventListener('hashchange', handleHash);
+  // パソコンでは Ctrl+Z で元に戻す、Ctrl+Shift+Z / Ctrl+Y でやり直す（入力欄の中ではブラウザ標準の動作のまま）
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    const k = e.key.toLowerCase();
+    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoChange(); }
+    else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redoChange(); }
+  });
   // 同じ端末で別のタブが保存したら、その内容を読み込み直す（古い内容で上書きして記録を消さないように）
   window.addEventListener('storage', (e) => {
     if (e.key === STORE_KEY) {

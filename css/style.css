@@ -420,6 +420,8 @@ button { cursor: pointer; touch-action: manipulation; }
   text-align: center;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.actionable { pointer-events: auto; display: flex; align-items: center; gap: 12px; text-align: left; border-radius: 14px; }
+.toast-btn { border: 0; background: none; color: #8ab4ff; font-weight: 700; padding: 4px 2px; white-space: nowrap; }
 
 /* 試合中はヘッダーを隠して入力エリアを広く */
 body.is-live .topbar { display: none; }
@@ -523,3 +525,9 @@ body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
   padding: 10px 14px; margin-bottom: 14px; font-weight: 600; text-align: left;
 }
 .treat-banner .go { margin-left: auto; color: var(--primary); }
+
+.history-btns { display: inline-flex; gap: 6px; }
+.history-btns .btn { min-height: 30px; padding: 4px 8px; font-size: 12px; }
+.sub-title { font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+.treat-banner .tb-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tb-line { font-size: 13px; font-weight: 400; }

@@ -269,6 +269,18 @@
     return true;
   }
 
+  // 友だちコードやIDで追加した相手は名前が分からないので、相手から届いた本人の名前を使う
+  // （名前の変更通知をすでに受け取っている場合や、自分で呼び名を付けている場合はそのまま）
+  function adoptFriendName(friend, name) {
+    if (!name) return;
+    if (!friend.nameAt) friend.remoteName = name;
+    if (friend.custom || friend.nameAt) return;
+    const next = uniqueFriendName(name, friend.id);
+    if (next === friend.name) return;
+    friend.name = next;
+    for (const m of db.matches) if (m.opponentId === friend.id) m.opponent = next;
+  }
+
   function queueMatch(m) {
     if (m.received || !m.opponentId || !friendById(m.opponentId)) return;
     const p = L.matchPayload(m);
@@ -373,10 +385,12 @@
       if (!friend.pub) {
         // ID だけで追加した相手や、暗号化前から連携していた相手の鍵をここで受け取る
         friend.pub = env.pub;
-        return env.from;
+      } else if (friend.pub !== env.pub) {
+        // 登録済みの鍵と違う鍵での申請は、なりすましの可能性があるので無視する
+        return null;
       }
-      // 登録済みの鍵と違う鍵での申請は、なりすましの可能性があるので無視する
-      return friend.pub === env.pub ? env.from : null;
+      adoptFriendName(friend, env.name);
+      return env.from;
     }
     if (db.blocked.includes(env.from)) return null;
     const req = db.requests.find((r) => r.id === env.from);
@@ -1025,7 +1039,7 @@
         html += `<div class="card notice"><p>${esc(friendById(pending.id).name)}さんとはすでに連携しています。</p></div>`;
       } else {
         html += `<div class="card notice">
-          <p><b>${esc(pending.name || '名前未設定')}</b>さんを友だちに追加しますか？<br><span class="muted small">追加すると、お互いの対戦結果が相手のアプリにも自動で届くようになります。</span></p>
+          <p>${pending.name ? `<b>${esc(pending.name)}</b>さん` : 'この友だちコードの人'}を友だちに追加しますか？<br><span class="muted small">追加すると、お互いの対戦結果が相手のアプリにも自動で届くようになります。</span></p>
           <button type="button" class="btn primary block" data-action="friend-accept">追加する</button>
           <button type="button" class="btn block" data-action="nav" data-view="friends">やめる</button>
         </div>`;
@@ -1064,9 +1078,10 @@
       for (const f of db.friends) {
         const ms = db.matches.filter((m) => m.opponentId === f.id);
         const w = ms.filter((m) => m.mySets > m.oppSets).length;
-        const waiting = db.outbox.filter((o) => o.to === f.id).length;
+        const waiting = db.outbox.filter((o) => o.to === f.id && !o.hello).length;
+        const pendingApproval = db.outbox.some((o) => o.to === f.id && o.hello);
         html += `<li>
-          <div class="f-main">${opponentLink(f.name, `<b>🔗 ${esc(f.name)}</b>`)}<span class="muted small">${ms.length ? `${w}勝${ms.length - w}敗` : '対戦なし'}${waiting ? ` ・ 送信待ち${waiting}件` : ''}${f.custom && f.remoteName && f.remoteName !== f.name ? ` ・ 本人の名前: ${esc(f.remoteName)}` : ''}</span></div>
+          <div class="f-main">${opponentLink(f.name, `<b>🔗 ${esc(f.name)}</b>`)}<span class="muted small">${pendingApproval ? '相手の承認待ち ・ ' : ''}${ms.length ? `${w}勝${ms.length - w}敗` : '対戦なし'}${waiting ? ` ・ 送信待ち${waiting}件` : ''}${f.custom && f.remoteName && f.remoteName !== f.name ? ` ・ 本人の名前: ${esc(f.remoteName)}` : ''}</span></div>
           <button type="button" class="btn small-btn" data-action="friend-rename" data-id="${esc(f.id)}">名前</button>
           <button type="button" class="btn small-btn danger" data-action="friend-remove" data-id="${esc(f.id)}">解除</button>
         </li>`;
@@ -1435,7 +1450,7 @@
         if (f) {
           queueHello(f.id);
           saveDb();
-          toast(`${f.name}さんを友だちに追加しました`);
+          toast(p.name ? `${f.name}さんを友だちに追加しました` : '追加しました。相手が承認すると名前が表示されます');
           sync({ render: true });
         }
         go('friends');
@@ -1463,13 +1478,12 @@
           toast('リンクまたはIDを確認してください');
           break;
         }
-        if (!p.name) p.name = prompt('この友だちの名前を入れてください') || '';
         go('friends', { pending: p });
         break;
       }
       case 'friend-rename': {
         const f = friendById(t.dataset.id);
-        const name = f && prompt('表示名を変更（空欄にすると相手が設定した名前に戻します）', f.name);
+        const name = f && prompt(`あなたの画面での${f.remoteName ? `「${f.remoteName}」さんの` : ''}表示名（相手には伝わりません。空欄で相手が設定した名前に戻します）`, f.name);
         if (name === null || name === undefined || !f) break;
         if (name.trim()) {
           f.name = uniqueFriendName(name, f.id);

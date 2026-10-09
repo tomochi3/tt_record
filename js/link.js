@@ -101,6 +101,8 @@
       mySets: m.mySets,
       oppSets: m.oppSets,
     };
+    // 奢りの対象にした試合は、相手も同じ勝数で数えられるよう「何勝で奢りか」も送る
+    if ([1, 2, 3].includes(m.treat)) p.treat = m.treat;
     if (p.mode === 'detail' && m.rally) {
       p.firstServer = m.firstServer;
       p.rally = m.rally;
@@ -137,6 +139,7 @@
       mySets: m.mySets,
       oppSets: m.oppSets,
     };
+    if ([1, 2, 3].includes(m.treat)) out.treat = m.treat;
     if (out.mode === 'detail' && typeof m.rally === 'string' && /^[mo]{1,2000}$/.test(m.rally) &&
         (m.firstServer === 'me' || m.firstServer === 'opp')) {
       const c = S.computeMatch(bestOf, m.firstServer, m.rally);
@@ -211,6 +214,7 @@
       createdAt: now,
       received: { from, id: m.id, rev: m.rev },
     };
+    if (m.treat) local.treat = m.treat;
     if (m.rally) {
       local.firstServer = flipSide(m.firstServer);
       local.rally = m.rally.replace(/[mo]/g, (c) => (c === 'm' ? 'o' : 'm'));
@@ -248,6 +252,7 @@
       createdAt: Number.isFinite(m.createdAt) ? m.createdAt : 0,
     };
     if (Number.isFinite(m.updatedAt)) out.updatedAt = m.updatedAt;
+    if ([1, 2, 3].includes(m.treat)) out.treat = m.treat;
     if (!out.opponent) return null;
     if (out.mode === 'detail') {
       const okRally = typeof m.rally === 'string' && /^[mo]{1,2000}$/.test(m.rally) && (m.firstServer === 'me' || m.firstServer === 'opp');

@@ -19,6 +19,7 @@
   }
 
   const S = window.TTScoring;
+  const TR = window.TTTreat;
   const L = window.TTLink;
   const NTFY = 'https://ntfy.sh';
   // ntfy.sh は約12時間しか預からないので、届いた返事(ack)が来るまで間隔をあけて再送する
@@ -31,7 +32,7 @@
 
   function loadDb() {
     const empty = {
-      settings: { myName: '自分' }, matches: [], friends: [], outbox: [], requests: [], blocked: [],
+      settings: { myName: '自分' }, matches: [], friends: [], outbox: [], requests: [], blocked: [], treats: {},
       sync: { since: 0, seen: [], tomb: {} },
     };
     let d = null;
@@ -46,6 +47,7 @@
     const out = d && typeof d === 'object' ? {
       settings: Object.assign({}, empty.settings, d.settings && typeof d.settings === 'object' ? d.settings : {}),
       matches: arr(d.matches).map(L.sanitizeMatch).filter(Boolean),
+      treats: sanitizeTreats(d.treats),
       friends: arr(d.friends).map(sanitizeFriend).filter(Boolean),
       outbox: arr(d.outbox).filter((o) => o && L.isId(o.to) && typeof o.key === 'string'),
       requests: arr(d.requests).filter((r) => r && L.isId(r.id) && L.isPub(r.pub))
@@ -67,7 +69,7 @@
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
         version: 1, settings: db.settings, matches: db.matches, friends: db.friends, outbox: db.outbox,
-        requests: db.requests, blocked: db.blocked, sync: db.sync,
+        requests: db.requests, blocked: db.blocked, sync: db.sync, treats: db.treats,
       }));
     } catch (e) {
       toast('保存に失敗しました');
@@ -76,6 +78,16 @@
 
   function cleanName(v) {
     return L.cleanText(v);
+  }
+
+  // 奢りを果たしたかのメモ（奢りが決まった試合のID → 済んだ日時）
+  function sanitizeTreats(t) {
+    const out = {};
+    if (!t || typeof t !== 'object') return out;
+    for (const [id, v] of Object.entries(t)) {
+      if (/^[A-Za-z0-9_-]{1,80}$/.test(id) && v && v.done === true) out[id] = { done: true, at: Number.isFinite(v.at) ? v.at : 0 };
+    }
+    return out;
   }
 
   function sanitizeFriend(f) {
@@ -99,6 +111,7 @@
         bestOf: v.bestOf,
         firstServer: v.firstServer === 'opp' ? 'opp' : 'me',
         rally: typeof v.rally === 'string' && /^[mo]{0,2000}$/.test(v.rally) ? v.rally : '',
+        treat: TR.isNeed(v.treat) ? v.treat : 0,
         startedAt: v.startedAt,
       };
     } catch (e) {
@@ -630,6 +643,75 @@
     else delete document.documentElement.dataset.theme;
   }
 
+  // ---------- 奢りメモ ----------
+
+  function treatOn() {
+    return !!(db.settings.treat && db.settings.treat.on);
+  }
+
+  function treatNeed() {
+    const n = db.settings.treat && db.settings.treat.need;
+    return TR.isNeed(n) ? n : 1;
+  }
+
+  // その相手との直近の試合が奢りの対象なら、次の試合も対象を初期値にする（毎回選び直さなくて済むように）
+  function defaultTreatFor(name) {
+    const key = (name || '').trim();
+    const last = key && sortedMatches().find((m) => (m.opponent || '').trim() === key);
+    return !!(last && TR.isNeed(last.treat));
+  }
+
+  function treatField(d) {
+    const need = d.id && TR.isNeed(d.treat) ? d.treat : treatNeed();
+    return `<span class="label">奢り</span>
+      <div class="seg" role="radiogroup">
+        <button type="button" role="radio" aria-checked="${!d.treat}" class="${d.treat ? '' : 'on'}" data-action="treat-pick" data-value="0">対象外</button>
+        <button type="button" role="radio" aria-checked="${!!d.treat}" class="${d.treat ? 'on' : ''}" data-action="treat-pick" data-value="1">🍜 対象（${need}勝で奢り）</button>
+      </div>
+      ${d.treat && d.opponent ? `<p class="hint small muted">${esc(treatProgressText(d.opponent))}</p>` : ''}`;
+  }
+
+  function refreshTreatField() {
+    const el = document.getElementById('treatField');
+    if (el && draft) el.innerHTML = treatField(draft);
+  }
+
+  function treatProgressText(name) {
+    const s = TR.summarize(db.matches).get((name || '').trim());
+    if (!s || (!s.me && !s.opp)) return `${name}さんとの奢り勝負: これから`;
+    return `${name}さんとの奢り勝負: 自分 ${s.me}勝 - 相手 ${s.opp}勝（${s.need}勝で奢り）`;
+  }
+
+  function treatDecisionText(d, name) {
+    return d.winner === 'me' ? `${name}さんが奢る` : `${name}さんに奢る`;
+  }
+
+  // 未済の奢り（相手ごと）
+  function pendingTreats() {
+    const out = [];
+    for (const [name, s] of TR.summarize(db.matches)) {
+      for (const d of s.decided) if (!(db.treats[d.matchId] && db.treats[d.matchId].done)) out.push(Object.assign({ name }, d));
+    }
+    return out.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  }
+
+  function treatItem(d, name) {
+    const done = db.treats[d.matchId] && db.treats[d.matchId].done;
+    return `<li class="treat-item${done ? ' done' : ''}">
+      <span class="ti-main"><b>${d.winner === 'me' ? '🍜 ご馳走になる' : '💸 奢る'}</b><span class="muted small">${fmtDate(d.date)}${d.need > 1 ? ` ・ ${d.me}-${d.opp}で決着` : ''}${name ? ` ・ ${esc(name)}さん` : ''}</span></span>
+      <button type="button" class="btn small-btn ${done ? '' : 'primary'}" data-action="treat-done" data-id="${esc(d.matchId)}" aria-pressed="${!!done}">${done ? '済' : '未'}</button>
+    </li>`;
+  }
+
+  // 保存した試合で奢りが決まったら知らせる
+  function announceTreat(m) {
+    if (!TR.isNeed(m.treat)) return false;
+    const d = TR.decidedBy(db.matches, m.id);
+    if (!d) return false;
+    toast(`🍜 奢り決定: ${treatDecisionText(d, m.opponent)}`);
+    return true;
+  }
+
   function myName() {
     return db.settings.myName || '自分';
   }
@@ -658,7 +740,7 @@
     if (v === 'edit') {
       const m = db.matches.find((x) => x.id === params.id);
       if (!m) return go('list');
-      draft = Object.assign({}, m, { result: [m.mySets, m.oppSets] });
+      draft = Object.assign({}, m, { result: [m.mySets, m.oppSets], treat: TR.isNeed(m.treat) ? m.treat : 0, treatTouched: true });
     }
     render();
     window.scrollTo(0, 0);
@@ -674,6 +756,8 @@
       result: null,
       firstServer: 'me',
       memo: '',
+      treat: false,
+      treatTouched: false,
     };
   }
 
@@ -733,6 +817,11 @@
     const wins = all.filter((m) => m.mySets > m.oppSets).length;
 
     let html = liveBanner();
+    const owed = pendingTreats();
+    if (owed.length) {
+      const toMe = owed.filter((d) => d.winner === 'me').length;
+      html += `<button type="button" class="treat-banner" data-action="nav" data-view="stats">🍜 未済の奢り：${toMe ? `ご馳走になる ${toMe}回` : ''}${toMe && owed.length - toMe ? ' ・ ' : ''}${owed.length - toMe ? `奢る ${owed.length - toMe}回` : ''}<span class="go">確認 ›</span></button>`;
+    }
     html += `<section class="card summary">
       <div><div class="big">${wins}<small>勝</small> ${all.length - wins}<small>敗</small></div><div class="muted">通算 ${all.length}試合</div></div>
       <div class="rate"><div class="big">${pct(wins, all.length)}</div><div class="muted">勝率</div></div>
@@ -772,7 +861,7 @@
           <span class="opp">vs ${esc(m.opponent)}</span>
           ${m.event ? `<span class="event">${esc(m.event)}</span>` : ''}
         </span>
-        <span class="meta"><span>${m.opponentId ? '<span class="chip link">🔗</span>' : ''}${m.mode === 'detail' ? '<span class="chip">詳細</span>' : ''}</span><span class="date">${fmtDate(m.date)}</span></span>
+        <span class="meta"><span>${TR.isNeed(m.treat) ? '<span class="chip treat" title="奢りの対象">🍜</span>' : ''}${m.opponentId ? '<span class="chip link">🔗</span>' : ''}${m.mode === 'detail' ? '<span class="chip">詳細</span>' : ''}</span><span class="date">${fmtDate(m.date)}</span></span>
       </button></li>`;
   }
 
@@ -812,6 +901,8 @@
           ? `<div class="locked">${d.bestOf}ゲームマッチ</div>`
           : segmented('bestOf', [[3, '3ゲーム'], [5, '5ゲーム'], [7, '7ゲーム']], d.bestOf)}
       </div>`;
+    // 奢りメモが有効なとき（または編集する試合が奢りの対象のとき）だけ選択肢を出す
+    if (treatOn() || (editing && d.treat)) html += `<div class="field" id="treatField">${treatField(d)}</div>`;
 
     if (d.mode === 'simple') {
       const rs = S.possibleResults(d.bestOf);
@@ -914,6 +1005,7 @@
         <div class="mh-opp">${opponentLink(m.opponent, `vs ${esc(m.opponent)} ›`)}</div>
         <div class="muted">${esc(m.date)}${m.event ? ` ・ ${esc(m.event)}` : ''} ・ ${m.bestOf}ゲームマッチ ・ ${m.mode === 'detail' ? '詳細記録' : 'セット数のみ'}</div>
         ${linkStatus(m)}
+        ${treatStatus(m)}
       </section>`;
 
     if (m.mode === 'detail' && m.rally) {
@@ -947,6 +1039,41 @@
       <button type="button" class="btn danger" data-action="delete" data-id="${esc(m.id)}">削除</button>
     </div>`;
     return html;
+  }
+
+  function treatStatus(m) {
+    if (!TR.isNeed(m.treat)) return '';
+    const d = TR.decidedBy(db.matches, m.id);
+    if (!d) return `<div class="treat-status">🍜 奢りの対象（${m.treat}勝で奢り）・ ${esc(treatProgressText(m.opponent))}</div>`;
+    const done = db.treats[d.matchId] && db.treats[d.matchId].done;
+    return `<div class="treat-status">🍜 この試合で決着：<b>${esc(treatDecisionText(d, m.opponent))}</b>
+      <button type="button" class="btn small-btn ${done ? '' : 'primary'}" data-action="treat-done" data-id="${esc(d.matchId)}" aria-pressed="${!!done}">${done ? '済' : '未'}</button></div>`;
+  }
+
+  // 相手ごとの奢りの状況（途中経過と、決まった奢りの一覧）
+  function treatCard(name) {
+    const s = TR.summarize(db.matches).get((name || '').trim());
+    if (!s) return '';
+    const decided = s.decided.slice().reverse();
+    const owedToMe = decided.filter((d) => d.winner === 'me' && !(db.treats[d.matchId] && db.treats[d.matchId].done)).length;
+    const iOwe = decided.filter((d) => d.winner === 'opp' && !(db.treats[d.matchId] && db.treats[d.matchId].done)).length;
+    return `<section class="card treat-card"><h3>🍜 奢り</h3>
+      <div class="treat-now">
+        <div><span class="tn-val">${s.me}</span><span class="tn-lbl">自分の勝ち</span></div>
+        <div class="tn-mid">${s.need}勝で奢り</div>
+        <div><span class="tn-val">${s.opp}</span><span class="tn-lbl">相手の勝ち</span></div>
+      </div>
+      ${owedToMe || iOwe ? `<p class="small">未済：${owedToMe ? `ご馳走になる <b>${owedToMe}回</b>` : ''}${owedToMe && iOwe ? ' ・ ' : ''}${iOwe ? `奢る <b>${iOwe}回</b>` : ''}</p>` : ''}
+      ${decided.length ? `<ul class="treat-list">${decided.map((d) => treatItem(d)).join('')}</ul>` : '<p class="muted small">まだ奢りは決まっていません。</p>'}
+    </section>`;
+  }
+
+  // 未済の奢り（成績タブ用）
+  function pendingTreatCard() {
+    const list = pendingTreats();
+    if (!list.length) return '';
+    return `<section class="card treat-card"><h3>🍜 未済の奢り <span class="muted small">（${list.length}件）</span></h3>
+      <ul class="treat-list">${list.map((d) => treatItem(d, d.name)).join('')}</ul></section>`;
   }
 
   function linkStatus(m) {
@@ -1000,6 +1127,7 @@
       ${fullGame.length ? `<p class="muted small">フルゲームの試合: ${fullWins}勝 ${fullGame.length - fullWins}敗</p>` : ''}
     </section>`;
 
+    html += pendingTreatCard();
     html += opponentStats(ms);
     html += rallyCard(ms);
     if (ms.some((m) => m.event)) html += groupTable('大会・練習別', ms, 'event');
@@ -1107,6 +1235,7 @@
         <div class="form-dots">${recent.map((m) => `<span class="fd ${m.mySets > m.oppSets ? 'w' : 'l'}" title="${esc(m.date)} ${m.mySets}-${m.oppSets}">${m.mySets > m.oppSets ? '○' : '●'}</span>`).join('')}</div>
       </section>`;
     html += rallyCard(ms);
+    html += treatCard(name);
     html += `<h3 class="list-title">対戦履歴</h3><ul class="match-list">${ms.map(matchItem).join('')}</ul>`;
     return html;
   }
@@ -1219,6 +1348,20 @@
     return html;
   }
 
+  function treatSettingCard() {
+    const on = treatOn();
+    const need = treatNeed();
+    const seg = (key, opts, cur) => `<div class="seg" role="radiogroup">${opts.map(([v, l]) =>
+      `<button type="button" role="radio" aria-checked="${String(v) === String(cur)}" class="${String(v) === String(cur) ? 'on' : ''}" data-action="treat-setting" data-key="${key}" data-value="${v}">${l}</button>`).join('')}</div>`;
+    return `<div class="card form">
+      <h3>🍜 奢りメモ</h3>
+      <p class="muted small">「負けた方が勝った方に奢る」約束の勝敗と、奢りを果たしたかをメモできます。オンにすると、試合の記録画面で「奢りの対象」を選べます。</p>
+      <div class="field">${seg('on', [[0, 'オフ'], [1, 'オン']], on ? 1 : 0)}</div>
+      ${on ? `<div class="field"><span class="label">何勝したら奢り？</span>${seg('need', [[1, '1勝'], [2, '2勝'], [3, '3勝']], need)}
+        <p class="hint small muted">先にこの勝数に達した方が勝ち（負けた方が奢る）。決まったら0勝から数え直します。変更はこれから記録する試合に使われます。</p></div>` : ''}
+    </div>`;
+  }
+
   function viewSettings() {
     return `<h2 class="view-title">設定</h2>
       <div class="card form">
@@ -1231,6 +1374,7 @@
           <p class="hint small muted">「自動」は端末のダークモード設定に合わせます。</p>
         </div>
       </div>
+      ${treatSettingCard()}
       <div class="card">
         <h3>データ</h3>
         <p class="muted small">記録はこの端末のブラウザ内に保存されます。機種変更やバックアップにはエクスポートを使ってください。</p>
@@ -1249,7 +1393,11 @@
     for (const el of main.querySelectorAll('[data-field]')) {
       el.addEventListener('input', () => {
         draft[el.dataset.field] = el.value;
-        if (el.dataset.field === 'opponent') document.getElementById('oppSuggest').innerHTML = opponentChips(el.value);
+        if (el.dataset.field === 'opponent') {
+          document.getElementById('oppSuggest').innerHTML = opponentChips(el.value);
+          if (!draft.treatTouched && treatOn()) draft.treat = defaultTreatFor(el.value);
+          refreshTreatField();
+        }
       });
     }
     const search = document.getElementById('listSearch');
@@ -1317,6 +1465,9 @@
       const prevOpponentId = m.opponentId;
       Object.assign(m, { date: d.date, opponent: d.opponent, event: d.event, memo: d.memo, updatedAt: Date.now() });
       if (m.mode !== 'detail') Object.assign(m, { bestOf: d.bestOf, mySets: d.result[0], oppSets: d.result[1] });
+      const treat = draftTreat(d);
+      if (treat) m.treat = treat;
+      else delete m.treat;
       if (!m.received) {
         // 相手を変えたら、前の友だちに送った結果は取り消す
         const f = friendByName(m.opponent);
@@ -1326,7 +1477,7 @@
       }
       saveDb();
       sync();
-      toast('更新しました');
+      if (!announceTreat(m)) toast('更新しました');
       go('match', { id: m.id });
       return;
     }
@@ -1342,6 +1493,8 @@
       memo: d.memo,
       createdAt: Date.now(),
     };
+    const treat = draftTreat(d);
+    if (treat) m.treat = treat;
     const friend = friendByName(m.opponent);
     if (friend) {
       m.opponentId = friend.id;
@@ -1358,8 +1511,15 @@
     saveDb();
     sync();
     draft = null;
-    toast(`${m.mySets > m.oppSets ? '勝ち' : '負け'}（${m.mySets}-${m.oppSets}）を記録しました`);
+    if (!announceTreat(m)) toast(`${m.mySets > m.oppSets ? '勝ち' : '負け'}（${m.mySets}-${m.oppSets}）を記録しました`);
     go('list');
+  }
+
+  // フォームの選択から、保存する「何勝で奢りか」を決める（対象外なら 0）
+  function draftTreat(d) {
+    if (!d.treat) return 0;
+    if (!treatOn() && !d.id) return 0;
+    return TR.isNeed(d.treat) ? d.treat : treatNeed();
   }
 
   function startLive() {
@@ -1372,6 +1532,7 @@
       bestOf: draft.bestOf,
       firstServer: draft.firstServer,
       rally: '',
+      treat: draftTreat(draft),
       startedAt: Date.now(),
     };
     draft = null;
@@ -1412,6 +1573,7 @@
       memo: live.memo,
       createdAt: Date.now(),
     };
+    if (TR.isNeed(live.treat)) m.treat = live.treat;
     const friend = friendByName(m.opponent);
     if (friend) m.opponentId = friend.id;
     db.matches.push(m);
@@ -1420,7 +1582,7 @@
     sync();
     live = null;
     saveLive();
-    toast('試合を保存しました');
+    if (!announceTreat(m)) toast('試合を保存しました');
     go('match', { id: m.id });
   }
 
@@ -1495,6 +1657,30 @@
         const input = main.querySelector('[data-field="opponent"]');
         input.value = draft.opponent;
         document.getElementById('oppSuggest').innerHTML = opponentChips(draft.opponent);
+        if (!draft.treatTouched && treatOn()) draft.treat = defaultTreatFor(draft.opponent);
+        refreshTreatField();
+        break;
+      }
+      case 'treat-pick':
+        draft.treat = t.dataset.value === '1' ? (draft.id && TR.isNeed(draft.treat) ? draft.treat : treatNeed()) : 0;
+        draft.treatTouched = true;
+        refreshTreatField();
+        break;
+      case 'treat-done': {
+        const id = t.dataset.id;
+        if (db.treats[id]) delete db.treats[id];
+        else db.treats[id] = { done: true, at: Date.now() };
+        saveDb();
+        render();
+        break;
+      }
+      case 'treat-setting': {
+        const cur = db.settings.treat || { on: false, need: 1 };
+        if (t.dataset.key === 'on') cur.on = t.dataset.value === '1';
+        if (t.dataset.key === 'need') cur.need = Number(t.dataset.value);
+        db.settings.treat = { on: !!cur.on, need: TR.isNeed(cur.need) ? cur.need : 1 };
+        saveDb();
+        render();
         break;
       }
       case 'pick-result':

@@ -608,6 +608,7 @@
   let draft = null;
   let listQuery = '';
   let statsRange = 'all';
+  let oppSort = 'recent'; // 対戦相手別の並び順（既定は最近対戦した順）
 
   function go(v, p) {
     view = v;
@@ -963,11 +964,50 @@
       ${fullGame.length ? `<p class="muted small">フルゲームの試合: ${fullWins}勝 ${fullGame.length - fullWins}敗</p>` : ''}
     </section>`;
 
+    html += opponentStats(ms);
     html += rallyCard(ms);
-
-    html += groupTable('対戦相手別', ms, 'opponent');
     if (ms.some((m) => m.event)) html += groupTable('大会・練習別', ms, 'event');
     return html;
+  }
+
+  // 対戦相手ごとの成績（勝率・勝敗・ゲーム数・最終対戦日）
+  function opponentStats(ms) {
+    const groups = new Map();
+    // ms は新しい順なので、最初に出てきた試合がその相手との最終対戦
+    ms.forEach((m, order) => {
+      const name = (m.opponent || '').trim();
+      if (!name) return;
+      const g = groups.get(name) || { name, n: 0, w: 0, sw: 0, sl: 0, last: m.date, order };
+      g.n++;
+      if (m.mySets > m.oppSets) g.w++;
+      g.sw += m.mySets;
+      g.sl += m.oppSets;
+      groups.set(name, g);
+    });
+    const sorters = {
+      recent: (a, b) => a.order - b.order,
+      count: (a, b) => b.n - a.n || a.order - b.order,
+      rate: (a, b) => b.w / b.n - a.w / a.n || b.n - a.n,
+      name: (a, b) => a.name.localeCompare(b.name, 'ja'),
+    };
+    const rows = [...groups.values()].sort(sorters[oppSort] || sorters.recent);
+    return `<section class="card">
+      <div class="card-head"><h3>対戦相手別 <span class="muted small">（${rows.length}人）</span></h3>
+        <select id="oppSort" class="sort" aria-label="並び順">
+          ${[['recent', '最近対戦した順'], ['count', '対戦数順'], ['rate', '勝率順'], ['name', '名前順']].map(([v, l]) =>
+            `<option value="${v}" ${v === oppSort ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </div>
+      <ul class="opp-stats">${rows.map((g) => `<li><button type="button" class="opp-row" data-action="opponent" data-name="${esc(g.name)}">
+        <span class="or-main">
+          <span class="or-name">${friendByName(g.name) ? '🔗 ' : ''}${esc(g.name)}</span>
+          <span class="or-sub">${g.w}勝${g.n - g.w}敗 ・ ゲーム ${g.sw}-${g.sl} ・ 最終 ${fmtDate(g.last) || '—'}</span>
+          <span class="or-bar" aria-hidden="true"><span data-w="${Math.round((g.w / g.n) * 1000) / 10}"></span></span>
+        </span>
+        <span class="or-rate">${pct(g.w, g.n)}</span>
+        <span class="or-go" aria-hidden="true">›</span>
+      </button></li>`).join('')}</ul>
+    </section>`;
   }
 
   // 詳細モードで記録した試合の集計
@@ -1189,6 +1229,8 @@
     }
     const range = document.getElementById('statsRange');
     if (range) range.addEventListener('change', () => { statsRange = range.value; render(); });
+    const sort = document.getElementById('oppSort');
+    if (sort) sort.addEventListener('change', () => { oppSort = sort.value; render(); });
     const name = document.getElementById('myName');
     if (name) {
       name.addEventListener('change', () => {

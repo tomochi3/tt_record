@@ -68,8 +68,21 @@
     return { id, name: cleanText(params.get('name') || ''), pub };
   }
 
+  // 見えない文字（ゼロ幅空白など）・文字の向きを変える制御文字・改行などを取り除き、
+  // 互換文字（全角英数など）をそろえる。見た目が同じ別の名前を作れないようにするため
+  const INVISIBLE_RE = /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8]/g;
+
+  function normalizeText(v) {
+    return typeof v === 'string' ? v.normalize('NFKC').replace(INVISIBLE_RE, '').replace(/\s+/g, ' ').trim() : '';
+  }
+
   function cleanText(v) {
-    return typeof v === 'string' ? v.trim().slice(0, MAX_TEXT) : '';
+    return normalizeText(v).slice(0, MAX_TEXT);
+  }
+
+  // 名前の同一判定用（空白の有無や大文字小文字の違いも同じとみなす。長さでは切らない）
+  function nameKey(v) {
+    return normalizeText(v).replace(/\s/g, '').toLowerCase();
   }
 
   function byteLength(s) {
@@ -289,6 +302,17 @@
     return subtle().importKey('jwk', jwk, ECDH, false, ['deriveKey']);
   }
 
+  // 公開鍵が本当に使えるもの（曲線上の点）か確かめる。形式だけ正しい壊れた鍵を弾く
+  async function isUsablePub(pub) {
+    if (!isPub(pub)) return false;
+    try {
+      await subtle().importKey('raw', fromB64u(pub), ECDH, false, []);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // 自分の秘密鍵と相手の公開鍵から、2人だけが作れる共通鍵を作る
   async function pairKey(privKey, pub) {
     const priv = privKey && privKey.type === 'private' ? privKey : await importPrivateJwk(privKey);
@@ -346,6 +370,9 @@
     VERSION,
     isId,
     isPub,
+    isUsablePub,
+    cleanText,
+    nameKey,
     newId,
     friendCode,
     sanitizeMatch,

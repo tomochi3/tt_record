@@ -130,3 +130,25 @@ test('sanitizeMatch: インポートや保存データの不正な値を弾く',
   assert.equal(odd.evil, undefined);
   assert.equal(odd.mode, 'simple');
 });
+
+test('cleanText/nameKey: 見えない文字や向きを変える制御文字を取り除く', () => {
+  assert.equal(L.cleanText('佐藤​'), '佐藤');
+  assert.equal(L.cleanText('‮藤佐'), '藤佐');
+  assert.equal(L.cleanText('佐⁠藤\n'), '佐藤');
+  assert.equal(L.cleanText('ＡＢＣ　１２３'), 'ABC 123');
+  assert.equal(L.nameKey('佐藤 '), L.nameKey('佐藤'));
+  assert.equal(L.nameKey('Sato'), L.nameKey('sato'));
+});
+
+test('isUsablePub: 形式だけ正しい壊れた鍵を弾く', async () => {
+  const { pub } = await L.generateKeys();
+  assert.equal(await L.isUsablePub(pub), true);
+  assert.equal(await L.isUsablePub('B' + 'A'.repeat(86)), false);
+  assert.equal(await L.isUsablePub('short'), false);
+});
+
+test('nameKey: 上限の長さで切らない（末尾の番号で区別できる）', () => {
+  const long = 'あ'.repeat(100);
+  assert.notEqual(L.nameKey(long.slice(0, 90) + '(2)'), L.nameKey(long));
+  assert.equal(L.cleanText('あ'.repeat(150)).length, 100);
+});

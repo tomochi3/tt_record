@@ -1,5 +1,23 @@
 'use strict';
 (function () {
+  // 他のサイトに埋め込まれている場合は画面を出さない（透明に重ねてボタンを押させる攻撃を防ぐ）
+  if (window.self !== window.top) {
+    document.getElementById('tabbar').hidden = true;
+    const main = document.getElementById('main');
+    main.textContent = '';
+    const p = document.createElement('p');
+    p.className = 'empty';
+    p.textContent = 'このアプリは他のページの中では使えません。';
+    const a = document.createElement('a');
+    a.href = location.href.split('#')[0];
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.className = 'btn primary';
+    a.textContent = 'アプリを直接開く';
+    main.append(p, a);
+    return;
+  }
+
   const S = window.TTScoring;
   const L = window.TTLink;
   const NTFY = 'https://ntfy.sh';
@@ -57,7 +75,7 @@
   }
 
   function cleanName(v) {
-    return typeof v === 'string' ? v.trim().slice(0, 40) : '';
+    return L.cleanText(v);
   }
 
   function sanitizeFriend(f) {
@@ -185,10 +203,11 @@
 
   // 他の友だちや自分と名前がかぶらないようにする
   function uniqueFriendName(name, exceptId) {
-    const raw = (name || '').trim();
-    const base = raw && raw !== '自分' ? raw : '友だち';
-    let n = base;
-    for (let i = 2; db.friends.some((f) => f.name === n && f.id !== exceptId); i++) n = `${base}(${i})`;
+    const raw = cleanName(name);
+    // 「(2)」などを付けても上限の長さに収まるよう、元の名前を少し短くしておく
+    const base = (raw && raw !== '自分' ? raw : '友だち').slice(0, 90);
+    let n = raw && raw !== '自分' ? raw : base;
+    for (let i = 2; i < 10000 && db.friends.some((f) => L.nameKey(f.name) === L.nameKey(n) && f.id !== exceptId); i++) n = `${base}(${i})`;
     return n;
   }
 
@@ -353,7 +372,12 @@
         const f = friendById(o.to);
         // 相手の鍵がまだ届いていなければ、届くまで送らずに待つ
         if (!f || !f.pub || !o.inner) continue;
-        body = await sealFor(f, o.inner);
+        try {
+          body = await sealFor(f, o.inner);
+        } catch (e) {
+          // 鍵が壊れている相手がいても、他の友だちへの送信は続ける
+          continue;
+        }
       }
       try {
         await post(o.to, body);
@@ -438,13 +462,22 @@
       if (req.pub === env.pub) req.name = env.name;
       return null;
     }
+    // 上限を超えた申請は捨てる（大量の迷惑申請で先に届いた申請を押し流されないように）
+    if (db.requests.length >= 20) return null;
     db.requests.push({ id: env.from, name: env.name, pub: env.pub, at: Date.now(), buffer: [] });
-    db.requests = db.requests.slice(-20);
     toast(`${env.name || '友だち'}さんから友だち申請が届きました`);
     return null;
   }
 
   async function openSealed(env) {
+    try {
+      return await openSealedUnsafe(env);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function openSealedUnsafe(env) {
     const friend = friendById(env.from);
     if (friend && friend.pub) {
       const text = await L.open(await keyFor(friend), env.from, db.settings.myId, env);
@@ -496,6 +529,8 @@
       const env = L.parseEnvelope(e.message);
       if (!env || env.from === db.settings.myId) continue;
       if (env.kind === 'hello') {
+        // 形式だけ正しい壊れた鍵の申請は表示しない
+        if (!(await L.isUsablePub(env.pub))) continue;
         const ackTo = handleHello(env);
         if (ackTo) addAck(acks, ackTo, `h:${ackTo}`);
         changed = true;
@@ -665,7 +700,8 @@
   function requestBanner() {
     return db.requests.map((r) => {
       // 既存の友だちと同じ名前での申請は、なりすましの可能性があるので注意を出す
-      const same = r.name && db.friends.find((f) => f.name === r.name || f.remoteName === r.name);
+      const k = L.nameKey(r.name);
+      const same = k && db.friends.find((f) => L.nameKey(f.name) === k || L.nameKey(f.remoteName) === k);
       return `<div class="request-banner${same ? ' warn-border' : ''}">
       <span class="rb-text">🤝 <b>${esc(r.name || '名前未設定')}</b>さんから友だち申請${same ? `<br><span class="warn small">⚠ 友だちの「${esc(same.name)}」さんとは別の人です。心当たりがなければ追加しないでください</span>` : ''}</span>
       <button type="button" class="btn primary small-btn" data-action="req-accept" data-id="${esc(r.id)}">追加</button>
@@ -767,9 +803,9 @@
 
     html += `<div class="card form">
       <label>日付<input type="date" data-field="date" value="${esc(d.date)}"></label>
-      <label class="with-suggest">対戦相手<input type="text" data-field="opponent" placeholder="例: 山田 太郎" value="${esc(d.opponent)}" autocomplete="off"></label>
+      <label class="with-suggest">対戦相手<input type="text" data-field="opponent" placeholder="例: 山田 太郎" value="${esc(d.opponent)}" autocomplete="off" maxlength="100"></label>
       <div class="opp-suggest" id="oppSuggest">${opponentChips(d.opponent)}</div>
-      <label>大会・練習名 <span class="opt">任意</span><input type="text" data-field="event" list="dl-event" placeholder="例: 市民大会 / 練習試合" value="${esc(d.event)}" autocomplete="off"></label>
+      <label>大会・練習名 <span class="opt">任意</span><input type="text" data-field="event" list="dl-event" placeholder="例: 市民大会 / 練習試合" value="${esc(d.event)}" autocomplete="off" maxlength="100"></label>
       ${datalist('dl-event', uniqueValues('event'))}
       <div class="field"><span class="label">試合形式</span>
         ${detailLocked
@@ -795,7 +831,7 @@
       </div>`;
     }
 
-    html += `<label>メモ <span class="opt">任意</span><textarea data-field="memo" rows="3" placeholder="戦型、気づいたことなど">${esc(d.memo)}</textarea></label>
+    html += `<label>メモ <span class="opt">任意</span><textarea data-field="memo" rows="3" maxlength="2000" placeholder="戦型、気づいたことなど">${esc(d.memo)}</textarea></label>
     </div>`;
 
     if (d.mode === 'detail' && !editing) {
@@ -1566,7 +1602,7 @@
           toast('友だちリンクか友だちコードを貼り付けてください（英数字20文字だけのIDや古いリンクでは追加できません）');
           break;
         }
-        go('friends', { pending: p });
+        showPending(p);
         break;
       }
       case 'friend-rename': {
@@ -1630,6 +1666,15 @@
     go('new', { keepDraft: view !== 'new' && view !== 'edit' });
   });
 
+  // 鍵が使えるものか確かめてから追加の確認を出す
+  function showPending(p) {
+    go('friends');
+    L.isUsablePub(p.pub).then((ok) => {
+      if (ok) go('friends', { pending: p });
+      else toast('この友だちリンク・コードは壊れているため追加できません');
+    });
+  }
+
   // 友だちリンク (#add=...) から開かれたときは追加の確認を出す
   function handleHash() {
     if (!location.hash.includes('add=')) return false;
@@ -1639,11 +1684,24 @@
       toast('古い形式のリンクです。相手に新しいリンクを送ってもらってください');
       return false;
     }
-    go('friends', { pending: p });
+    showPending(p);
     return true;
   }
 
   window.addEventListener('hashchange', handleHash);
+  // 同じ端末で別のタブが保存したら、その内容を読み込み直す（古い内容で上書きして記録を消さないように）
+  window.addEventListener('storage', (e) => {
+    if (e.key === STORE_KEY) {
+      Object.assign(db, loadDb());
+      keyCache.clear();
+    } else if (e.key === LIVE_KEY) {
+      live = loadLive();
+      if (view === 'live' && !live) return go('list');
+    } else {
+      return;
+    }
+    if (!['new', 'edit'].includes(view)) render();
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') sync();
   });

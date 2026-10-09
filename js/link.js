@@ -51,10 +51,10 @@
     return pub ? `${id}.${pub}` : id;
   }
 
-  // 友だちリンク・友だちコード・ID のどれでも受け付ける
+  // 友だちリンクか友だちコードを読み取る。公開鍵が入っていないもの（ID だけ・古い形式のリンク）は、
+  // 最初の鍵交換で第三者に割り込まれる余地があるので受け付けない
   function parseFriendInput(text) {
     const s = String(text || '').trim();
-    if (isId(s)) return { id: s, name: '', pub: '' };
     const dot = s.indexOf('.');
     if (dot > 0 && !s.includes('#') && isId(s.slice(0, dot)) && isPub(s.slice(dot + 1))) {
       return { id: s.slice(0, dot), name: '', pub: s.slice(dot + 1) };
@@ -64,7 +64,8 @@
     const id = params.get('add');
     if (!isId(id)) return null;
     const pub = params.get('k') || '';
-    return { id, name: cleanText(params.get('name') || ''), pub: isPub(pub) ? pub : '' };
+    if (!isPub(pub)) return null;
+    return { id, name: cleanText(params.get('name') || ''), pub };
   }
 
   function cleanText(v) {
@@ -272,18 +273,25 @@
 
   const ECDH = { name: 'ECDH', namedCurve: 'P-256' };
 
-  // 端末の鍵ペアを作る。pub は公開してよい、priv はこの端末だけに保存する
-  async function generateKeys() {
-    const kp = await subtle().generateKey(ECDH, true, ['deriveKey']);
+  // 端末の鍵ペアを作る。pub は公開してよい。priv は「取り出し不可」の鍵で、
+  // ブラウザの中で使えるだけで中身を読み出せない（盗まれてもファイルにできない）
+  // exportable=true は、取り出し不可の鍵を保存できない環境向けの予備（JWK で返す）
+  async function generateKeys(exportable) {
+    const kp = await subtle().generateKey(ECDH, !!exportable, ['deriveKey']);
     return {
       pub: toB64u(await subtle().exportKey('raw', kp.publicKey)),
-      priv: await subtle().exportKey('jwk', kp.privateKey),
+      priv: exportable ? await subtle().exportKey('jwk', kp.privateKey) : kp.privateKey,
     };
   }
 
+  // 以前の形式（JWK で保存していた秘密鍵）を取り出し不可の鍵に作り直す
+  function importPrivateJwk(jwk) {
+    return subtle().importKey('jwk', jwk, ECDH, false, ['deriveKey']);
+  }
+
   // 自分の秘密鍵と相手の公開鍵から、2人だけが作れる共通鍵を作る
-  async function pairKey(privJwk, pub) {
-    const priv = await subtle().importKey('jwk', privJwk, ECDH, false, ['deriveKey']);
+  async function pairKey(privKey, pub) {
+    const priv = privKey && privKey.type === 'private' ? privKey : await importPrivateJwk(privKey);
     const peer = await subtle().importKey('raw', fromB64u(pub), ECDH, false, []);
     return subtle().deriveKey({ name: 'ECDH', public: peer }, priv, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   }
@@ -342,6 +350,7 @@
     friendCode,
     sanitizeMatch,
     generateKeys,
+    importPrivateJwk,
     pairKey,
     seal,
     open,

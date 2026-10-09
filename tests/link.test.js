@@ -12,10 +12,10 @@ test('newId: 20文字の英数字', () => {
   assert.ok(L.isId(id));
 });
 
-test('parseFriendInput: リンクとIDの両方を受け付ける', () => {
+test('parseFriendInput: 公開鍵のないID・古いリンクは受け付けない', () => {
   const link = L.friendLink('https://example.com/tt_record/#old', A, '山田 太郎');
-  assert.deepEqual(L.parseFriendInput(link), { id: A, name: '山田 太郎', pub: '' });
-  assert.deepEqual(L.parseFriendInput(`  ${A} `), { id: A, name: '', pub: '' });
+  assert.equal(L.parseFriendInput(link), null);
+  assert.equal(L.parseFriendInput(`  ${A} `), null);
   assert.equal(L.parseFriendInput('https://example.com/#add=short'), null);
   assert.equal(L.parseFriendInput('こんにちは'), null);
 });
@@ -86,6 +86,9 @@ test('暗号: 2人の共通鍵で暗号化・復号でき、第三者・送り�
   const b = await L.generateKeys();
   const c = await L.generateKeys();
   assert.ok(L.isPub(a.pub));
+  // 秘密鍵は取り出し不可
+  assert.equal(a.priv.extractable, false);
+  await assert.rejects(globalThis.crypto.subtle.exportKey('jwk', a.priv));
   const kAB = await L.pairKey(a.priv, b.pub);
   const kBA = await L.pairKey(b.priv, a.pub);
   const kCB = await L.pairKey(c.priv, b.pub);
@@ -110,7 +113,7 @@ test('友だちリンク・友だちコード・IDの読み取り（公開鍵つ
   const link = L.friendLink('https://example.com/tt_record/', A, '山田', pub);
   assert.deepEqual(L.parseFriendInput(link), { id: A, name: '山田', pub });
   assert.deepEqual(L.parseFriendInput(L.friendCode(A, pub)), { id: A, name: '', pub });
-  assert.deepEqual(L.parseFriendInput(A), { id: A, name: '', pub: '' });
+  assert.deepEqual(L.parseFriendInput(`  ${L.friendCode(A, pub)}\n`), { id: A, name: '', pub });
   const hello = L.parseEnvelope(L.helloEnvelope(A, '山田', pub));
   assert.deepEqual(hello, { kind: 'hello', from: A, name: '山田', pub });
 });

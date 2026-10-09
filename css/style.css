@@ -482,3 +482,5 @@ body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
   padding: 10px 12px; margin-bottom: 12px;
 }
 .request-banner .rb-text { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; }
+.request-banner.warn-border { border-color: var(--lose); }
+.request-banner .rb-text { white-space: normal; }

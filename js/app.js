@@ -214,15 +214,55 @@
   let lastSyncOk = null;
   const keyCache = new Map();
 
+  // 秘密鍵は「取り出し不可」の CryptoKey のまま IndexedDB に保存する（localStorage には公開鍵だけ）。
+  // 同じ場所で動くスクリプトでも鍵の中身は読み出せないので、ファイルに書き出したり持ち去ったりできない
+  let privKey = null;
+  const IDB_NAME = 'ttrecord';
+
+  function idb(mode, fn) {
+    return new Promise((resolve) => {
+      try {
+        const open = indexedDB.open(IDB_NAME, 1);
+        open.onupgradeneeded = () => open.result.createObjectStore('keys');
+        open.onerror = () => resolve(null);
+        open.onsuccess = () => {
+          const tx = open.result.transaction('keys', mode);
+          const req = fn(tx.objectStore('keys'));
+          tx.oncomplete = () => { open.result.close(); resolve(req ? req.result : true); };
+          tx.onerror = () => { open.result.close(); resolve(null); };
+        };
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
   // 端末の鍵ペアを用意する（初回だけ作成）。起動処理の最後で呼ぶ
   let keysReady = Promise.resolve();
   function prepareKeys() {
     keysReady = (async () => {
-      const k = db.settings.keys;
-      if (!k || !L.isPub(k.pub) || !k.priv) {
-        db.settings.keys = await L.generateKeys();
-        saveDb();
+      const k = db.settings.keys || {};
+      const stored = await idb('readonly', (s) => s.get('identity'));
+      if (stored && L.isPub(stored.pub) && stored.priv) {
+        privKey = stored.priv;
+        if (k.pub !== stored.pub || k.priv) db.settings.keys = { pub: stored.pub };
+      } else if (k.priv && L.isPub(k.pub)) {
+        // 以前の形式（localStorage に JWK）から移す。移せたら JWK は消す
+        privKey = await L.importPrivateJwk(k.priv);
+        if (await idb('readwrite', (s) => s.put({ pub: k.pub, priv: privKey }, 'identity'))) db.settings.keys = { pub: k.pub };
+      } else {
+        const fresh = await L.generateKeys();
+        if (await idb('readwrite', (s) => s.put(fresh, 'identity'))) {
+          privKey = fresh.priv;
+          db.settings.keys = { pub: fresh.pub };
+        } else {
+          // IndexedDB が使えない環境（一部のプライベートブラウズなど）では従来どおり保存する
+          const legacy = await L.generateKeys(true);
+          privKey = await L.importPrivateJwk(legacy.priv);
+          db.settings.keys = legacy;
+        }
       }
+      saveDb();
     })().catch(() => {
       /* 古いブラウザなどで暗号が使えない場合は連携だけ止まる */
     });
@@ -234,7 +274,7 @@
 
   async function keyFor(friend) {
     const cacheKey = `${friend.id}:${friend.pub}`;
-    if (!keyCache.has(cacheKey)) keyCache.set(cacheKey, L.pairKey(db.settings.keys.priv, friend.pub));
+    if (!keyCache.has(cacheKey)) keyCache.set(cacheKey, L.pairKey(privKey, friend.pub));
     return keyCache.get(cacheKey);
   }
 
@@ -520,7 +560,7 @@
     let changed = false;
     try {
       await keysReady;
-      if (!myPub()) throw new Error('no keys');
+      if (!myPub() || !privKey) throw new Error('no keys');
       changed = await pollInbox();
       lastSyncOk = true;
       await flushOutbox();
@@ -622,11 +662,15 @@
   }
 
   function requestBanner() {
-    return db.requests.map((r) => `<div class="request-banner">
-      <span class="rb-text">🤝 <b>${esc(r.name || '名前未設定')}</b>さんから友だち申請</span>
+    return db.requests.map((r) => {
+      // 既存の友だちと同じ名前での申請は、なりすましの可能性があるので注意を出す
+      const same = r.name && db.friends.find((f) => f.name === r.name || f.remoteName === r.name);
+      return `<div class="request-banner${same ? ' warn-border' : ''}">
+      <span class="rb-text">🤝 <b>${esc(r.name || '名前未設定')}</b>さんから友だち申請${same ? `<br><span class="warn small">⚠ 友だちの「${esc(same.name)}」さんとは別の人です。心当たりがなければ追加しないでください</span>` : ''}</span>
       <button type="button" class="btn primary small-btn" data-action="req-accept" data-id="${esc(r.id)}">追加</button>
       <button type="button" class="btn small-btn" data-action="req-decline" data-id="${esc(r.id)}" aria-label="申請を断る">×</button>
-    </div>`).join('');
+    </div>`;
+    }).join('');
   }
 
   function resultBadge(m) {
@@ -1066,7 +1110,7 @@
 
     html += `<div class="card form">
       <h3>友だちを追加</h3>
-      <label>相手のリンク・友だちコード・IDを貼り付け<input type="text" id="friendInput" placeholder="https://…#add=… または 友だちコード" autocomplete="off"></label>
+      <label>相手の友だちリンクか友だちコードを貼り付け<input type="text" id="friendInput" placeholder="https://…#add=… または 友だちコード" autocomplete="off"></label>
       <button type="button" class="btn primary block" data-action="friend-add">追加</button>
     </div>`;
 
@@ -1303,7 +1347,9 @@
   }
 
   function exportData() {
-    const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), settings: db.settings, matches: db.matches, friends: db.friends }, null, 2)], { type: 'application/json' });
+    // 鍵やIDは入れない（ファイルが他人に渡ってもなりすましに使えないように）
+    const settings = { myName: db.settings.myName, theme: db.settings.theme };
+    const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), settings, matches: db.matches, friends: db.friends }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `tt-record-${today()}.json`;
@@ -1475,7 +1521,7 @@
         const input = document.getElementById('friendInput');
         const p = L.parseFriendInput(input.value);
         if (!p) {
-          toast('リンクまたはIDを確認してください');
+          toast('友だちリンクか友だちコードを貼り付けてください（英数字20文字だけのIDや古いリンクでは追加できません）');
           break;
         }
         go('friends', { pending: p });
@@ -1547,7 +1593,10 @@
     if (!location.hash.includes('add=')) return false;
     const p = L.parseFriendInput(location.hash);
     history.replaceState(null, '', location.pathname + location.search);
-    if (!p) return false;
+    if (!p) {
+      toast('古い形式のリンクです。相手に新しいリンクを送ってもらってください');
+      return false;
+    }
     go('friends', { pending: p });
     return true;
   }

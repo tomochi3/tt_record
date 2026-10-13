@@ -529,3 +529,4 @@ body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
 .sub-title { font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
 .treat-banner .tb-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tb-line { font-size: 13px; font-weight: 400; }
+.storage-ok { color: var(--win); }

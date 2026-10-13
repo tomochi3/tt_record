@@ -1423,6 +1423,7 @@
       <div class="card">
         <h3>データ</h3>
         <p class="muted small">記録はこの端末のブラウザ内に保存されます。機種変更やバックアップにはエクスポートを使ってください。</p>
+        ${storageNote()}
         <button type="button" class="btn block" data-action="export">エクスポート（JSON）</button>
         <label class="btn block file-btn">インポート（JSON）<input type="file" id="importFile" accept="application/json,.json"></label>
         <button type="button" class="btn block danger" data-action="wipe">すべての記録を削除</button>
@@ -1912,6 +1913,46 @@
     go('new', { keepDraft: view !== 'new' && view !== 'edit' });
   });
 
+  // ---------- 保存データを消されにくくする ----------
+  // ブラウザは容量不足や長く使われていないサイトの保存データを自動で消すことがある
+  // （iPhone の Safari は7日間開かないと消す）。消さないよう頼んでおく。
+  // Chrome・Edge・Safari は利用状況から自動で判断し確認画面を出さないが、
+  // パソコンの Firefox は許可の確認を出して操作が増えるため頼まない。
+  let storageState = 'unknown'; // persisted | not-persisted | unsupported
+  function asksPermission() {
+    return /Firefox\//.test(navigator.userAgent) && !/FxiOS/.test(navigator.userAgent);
+  }
+
+  async function requestPersistentStorage() {
+    const st = navigator.storage;
+    if (!st || !st.persisted) {
+      storageState = 'unsupported';
+      return;
+    }
+    try {
+      let ok = await st.persisted();
+      // まだ認められていなければ、起動のたびに頼み直す（使い続けると認められやすくなる）
+      if (!ok && st.persist && !asksPermission()) ok = await st.persist();
+      storageState = ok ? 'persisted' : 'not-persisted';
+    } catch (e) {
+      storageState = 'unsupported';
+    }
+    if (view === 'settings') render();
+  }
+
+  function storageNote() {
+    if (storageState === 'persisted') return '<p class="small storage-ok">この端末では、ブラウザが記録を自動で消さない設定になっています。</p>';
+    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    const standalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+    if (ios && !standalone) {
+      return '<p class="small warn">iPhone の Safari では、7日間開かないと記録が消えることがあります。共有メニューの「ホーム画面に追加」から使うと消えません。</p>';
+    }
+    if (storageState === 'not-persisted') {
+      return '<p class="small muted">ブラウザの空き容量が少なくなると、記録が消される可能性があります。ときどきエクスポートしておくと安心です。</p>';
+    }
+    return '';
+  }
+
   // 鍵が使えるものか確かめてから追加の確認を出す
   function showPending(p) {
     go('friends');
@@ -1964,4 +2005,5 @@
   keysReady.then(() => { if (view === 'friends') render(); });
   saveDb(); // 新しく作ったIDを保存しておく
   sync();
+  requestPersistentStorage();
 })();

@@ -152,6 +152,13 @@
     return `${m}/${d}(${wd})`;
   }
 
+  // 年まで入れた日付（他の画面の「10/14(水)」とそろえた書き方）
+  function fmtDateFull(iso) {
+    const y = String(iso || '').slice(0, 4);
+    const short = fmtDate(iso);
+    return short ? `${y}/${short}` : '';
+  }
+
   function pct(won, total) {
     return total ? `${((won / total) * 100).toFixed(1)}%` : '—';
   }
@@ -848,7 +855,7 @@
       : all;
     const wins = all.filter((m) => m.mySets > m.oppSets).length;
 
-    let html = liveBanner();
+    let html = liveBanner() + '<h2 class="view-title">履歴</h2>';
     const owed = pendingTreats();
     const going = treatsInProgress();
     if (owed.length || going.length) {
@@ -897,7 +904,7 @@
           <span class="opp">vs ${esc(m.opponent)}</span>
           ${m.event ? `<span class="event">${esc(m.event)}</span>` : ''}
         </span>
-        <span class="meta"><span>${TR.isNeed(m.treat) ? '<span class="chip treat" title="奢りの対象">🍜</span>' : ''}${m.opponentId ? '<span class="chip link">🔗</span>' : ''}${m.mode === 'detail' ? '<span class="chip">詳細</span>' : ''}</span><span class="date">${fmtDate(m.date)}</span></span>
+        <span class="meta"><span>${TR.isNeed(m.treat) ? '<span class="chip treat" title="奢りの対象">🍜</span>' : ''}${m.opponentId ? '<span class="chip link">🔗</span>' : ''}${m.mode === 'detail' ? '<span class="chip">1点ごと</span>' : ''}</span><span class="date">${fmtDate(m.date)}</span></span>
       </button></li>`;
   }
 
@@ -926,19 +933,15 @@
       </div>`;
     }
 
+    // よく使う「相手 → 結果 → 保存」を上にまとめ、日付・大会名・メモは下の「そのほか」に置く
     html += `<div class="card form">
-      <label>日付<input type="date" data-field="date" value="${esc(d.date)}"></label>
       <label class="with-suggest">対戦相手<input type="text" data-field="opponent" placeholder="例: 山田 太郎" value="${esc(d.opponent)}" autocomplete="off" maxlength="100"></label>
       <div class="opp-suggest" id="oppSuggest">${opponentChips(d.opponent)}</div>
-      <label>大会・練習名 <span class="opt">任意</span><input type="text" data-field="event" list="dl-event" placeholder="例: 市民大会 / 練習試合" value="${esc(d.event)}" autocomplete="off" maxlength="100"></label>
-      ${datalist('dl-event', uniqueValues('event'))}
       <div class="field"><span class="label">試合形式</span>
         ${detailLocked
           ? `<div class="locked">${d.bestOf}ゲームマッチ</div>`
           : segmented('bestOf', [[3, '3ゲーム'], [5, '5ゲーム'], [7, '7ゲーム']], d.bestOf)}
       </div>`;
-    // 奢りメモが有効なとき（または編集する試合が奢りの対象のとき）だけ選択肢を出す
-    if (treatOn() || (editing && d.treat)) html += `<div class="field" id="treatField">${treatField(d)}</div>`;
 
     if (d.mode === 'simple') {
       const rs = S.possibleResults(d.bestOf);
@@ -951,24 +954,32 @@
         }).join('')}</div>
       </div>`;
     } else if (detailLocked) {
-      html += `<div class="field"><span class="label">結果</span><div class="locked">${d.mySets} - ${d.oppSets}（詳細モードで記録した試合はスコアを変更できません）</div></div>`;
+      html += `<div class="field"><span class="label">結果</span><div class="locked">${d.mySets} - ${d.oppSets}（1点ごとに記録した試合はスコアを変更できません）</div></div>`;
     } else {
       html += `<div class="field"><span class="label">最初のサーブ</span>
         ${segmented('firstServer', [['me', esc(myName())], ['opp', '相手']], d.firstServer)}
       </div>`;
     }
+    // 奢りメモが有効なとき（または編集する試合が奢りの対象のとき）だけ選択肢を出す
+    if (treatOn() || (editing && d.treat)) html += `<div class="field" id="treatField">${treatField(d)}</div>`;
+    html += '</div>';
 
-    html += `<label>メモ <span class="opt">任意</span><textarea data-field="memo" rows="3" maxlength="2000" placeholder="戦型、気づいたことなど">${esc(d.memo)}</textarea></label>
+    const startsLive = d.mode === 'detail' && !editing;
+    html += `<div class="card form">
+      <h3 class="form-sub">そのほか <span class="opt">任意</span></h3>
+      <label>日付<input type="date" data-field="date" value="${esc(d.date)}"></label>
+      <label>大会・練習名<input type="text" data-field="event" list="dl-event" placeholder="例: 市民大会 / 練習試合" value="${esc(d.event)}" autocomplete="off" maxlength="100"></label>
+      ${datalist('dl-event', uniqueValues('event'))}
+      ${startsLive ? '' : `<label>メモ<textarea data-field="memo" rows="3" maxlength="2000" placeholder="戦型、気づいたことなど">${esc(d.memo)}</textarea></label>`}
     </div>`;
+    if (startsLive) html += '<p class="hint small muted center">メモは試合が終わった画面で書けます。</p>';
 
-    if (d.mode === 'detail' && !editing) {
-      html += `<button type="button" class="btn primary block" data-action="start-live">試合開始</button>`;
-    } else {
-      html += `<button type="button" class="btn primary block" data-action="save-form">${editing ? '変更を保存' : '保存'}</button>`;
-    }
-    if (editing) {
-      html += `<button type="button" class="btn block" data-action="open" data-id="${esc(d.id)}">キャンセル</button>`;
-    }
+    // 保存ボタンは画面の下に固定し、スクロールせずに押せるようにする
+    html += `<div class="sticky-action">${startsLive
+      ? '<button type="button" class="btn primary block" data-action="start-live">試合開始</button>'
+      : `<button type="button" class="btn primary block" data-action="save-form">${editing ? '変更を保存' : '保存'}</button>`}
+      ${editing ? `<button type="button" class="btn block" data-action="open" data-id="${esc(d.id)}">キャンセル</button>` : ''}
+    </div>`;
     return html;
   }
 
@@ -988,7 +999,7 @@
         <span class="name opp">${esc(names.opp)}</span>
       </div>
       <div class="live-info">${live.bestOf}ゲームマッチ${live.event ? ` ・ ${esc(live.event)}` : ''}</div>
-      <div class="game-chips">${chips || '<span class="muted">第1ゲーム</span>'}</div>
+      <div class="game-chips">${chips}</div>
     </div>`;
 
     if (c.finished) {
@@ -997,6 +1008,7 @@
         <div class="finished-title">${win ? '勝利！' : '敗戦'}</div>
         <div class="finished-score">${c.mySets} - ${c.oppSets}</div>
         <div class="finished-games">${c.games.map((g) => `${g.me}-${g.opp}`).join(' / ')}</div>
+        <label class="finished-memo">メモ <span class="opt">任意</span><textarea data-live-field="memo" rows="3" maxlength="2000" placeholder="戦型、気づいたことなど">${esc(live.memo)}</textarea></label>
         <button type="button" class="btn primary block" data-action="live-save">記録を保存</button>
         <button type="button" class="btn block" data-action="live-undo">1点戻す</button>
       </div>`;
@@ -1020,9 +1032,7 @@
       <div class="pads">${pad('me')}${pad('opp')}</div>
       <div class="live-actions">
         <button type="button" class="btn" data-action="live-undo" ${live.rally.length ? '' : 'disabled'}>↶ 1点戻す</button>
-        <button type="button" class="btn" data-action="live-swap-serve" title="最初のサーブを入れ替える">⇄ サーブ修正</button>
-      </div>
-      <div class="live-actions">
+        <button type="button" class="btn" data-action="live-swap-serve" title="最初のサーブを入れ替える">⇄ 先サーブを入替</button>
         <button type="button" class="btn ghost" data-action="nav" data-view="list">一時中断</button>
         <button type="button" class="btn ghost danger" data-action="live-discard">試合を破棄</button>
       </div>`;
@@ -1039,7 +1049,7 @@
         <div class="mh-result">${win ? '勝ち' : '負け'}</div>
         <div class="mh-score">${m.mySets} - ${m.oppSets}</div>
         <div class="mh-opp">${opponentLink(m.opponent, `vs ${esc(m.opponent)} ›`)}</div>
-        <div class="muted">${esc(m.date)}${m.event ? ` ・ ${esc(m.event)}` : ''} ・ ${m.bestOf}ゲームマッチ ・ ${m.mode === 'detail' ? '詳細記録' : 'セット数のみ'}</div>
+        <div class="muted">${fmtDateFull(m.date)}${m.event ? ` ・ ${esc(m.event)}` : ''} ・ ${m.bestOf}ゲームマッチ ・ ${m.mode === 'detail' ? '1点ごとに記録' : 'セット数のみ'}</div>
         ${linkStatus(m)}
         ${treatStatus(m)}
       </section>`;
@@ -1169,7 +1179,7 @@
     const recent = ms.slice(0, 10).reverse();
     html += `<section class="card"><h3>直近${recent.length}試合 <span class="muted small">（左が古い）</span></h3>
       <div class="form-dots">${recent.map((m) => `<span class="fd ${m.mySets > m.oppSets ? 'w' : 'l'}" title="${esc(m.date)} vs ${esc(m.opponent)} ${m.mySets}-${m.oppSets}">${m.mySets > m.oppSets ? '○' : '●'}</span>`).join('')}</div>
-      ${fullGame.length ? `<p class="muted small">フルゲームの試合: ${fullWins}勝 ${fullGame.length - fullWins}敗</p>` : ''}
+      ${fullGame.length ? `<p class="muted small">最終ゲームまでもつれた試合: ${fullWins}勝 ${fullGame.length - fullWins}敗</p>` : ''}
     </section>`;
 
     html += pendingTreatCard();
@@ -1229,7 +1239,7 @@
         const st = S.rallyStats(S.computeMatch(m.bestOf, m.firstServer, m.rally));
         for (const k of Object.keys(agg)) agg[k] += st[k];
       }
-      html += `<section class="card"><h3>1点ごとのデータ <span class="muted small">（詳細記録 ${detail.length}試合）</span></h3><dl class="kv">
+      html += `<section class="card"><h3>1点ごとのデータ <span class="muted small">（1点ごとに記録した ${detail.length}試合）</span></h3><dl class="kv">
         <dt>総得点率</dt><dd>${pct(agg.pointsWon, agg.pointsTotal)}</dd>
         <dt>自分のサーブ時の得点率</dt><dd>${pct(agg.serveWon, agg.serveTotal)}</dd>
         <dt>相手のサーブ時の得点率</dt><dd>${pct(agg.receiveWon, agg.receiveTotal)}</dd>
@@ -1273,7 +1283,7 @@
       <div class="tiles">
         <div class="tile"><div class="t-val">${ms.length}</div><div class="t-lbl">対戦数</div></div>
         <div class="tile"><div class="t-val">${pct(sw, sw + sl)}</div><div class="t-lbl">ゲーム取得率（${sw}-${sl}）</div></div>
-        <div class="tile"><div class="t-val">${full.length ? `${fullW}-${full.length - fullW}` : '—'}</div><div class="t-lbl">フルゲーム</div></div>
+        <div class="tile"><div class="t-val">${full.length ? `${fullW}-${full.length - fullW}` : '—'}</div><div class="t-lbl">最終ゲームまでもつれた試合</div></div>
         <div class="tile"><div class="t-val">${streak}${ms[0].mySets > ms[0].oppSets ? '連勝' : '連敗'}</div><div class="t-lbl">現在</div></div>
       </div>
       <section class="card"><h3>直近${recent.length}試合 <span class="muted small">（左が古い）</span></h3>
@@ -1288,6 +1298,8 @@
   function groupTable(title, ms, key) {
     const groups = new Map();
     for (const m of ms) {
+      // 大会名を入れていない試合は「大会・練習別」に出さない
+      if (key === 'event' && !(m.event || '').trim()) continue;
       const k = (m[key] || '').trim() || '（未入力）';
       const g = groups.get(k) || { n: 0, w: 0, sw: 0, sl: 0 };
       g.n++;
@@ -1341,9 +1353,13 @@
     }
 
     const unnamed = !db.settings.myName || db.settings.myName === '自分';
-    html += `<div class="card form">
-      <label>あなたの名前（友だちのアプリに表示されます）<input type="text" id="myName" value="${esc(unnamed ? '' : db.settings.myName)}" placeholder="例: 山田 太郎" maxlength="20"></label>
-    </div>`;
+    // 名前の入力欄は設定にまとめる。まだ名前がないときだけ、ここでも入れられるようにする
+    html += unnamed
+      ? `<div class="card form">
+      <label>あなたの名前（友だちのアプリに表示されます）<input type="text" id="myName" value="" placeholder="例: 山田 太郎" maxlength="20"></label>
+    </div>`
+      : `<p class="name-line">あなたの名前：<b>${esc(db.settings.myName)}</b>
+      <button type="button" class="btn small-btn" data-action="nav" data-view="settings">設定で変更</button></p>`;
 
     html += `<div class="card">
       <h3>あなたの友だちリンク</h3>
@@ -1354,7 +1370,6 @@
         <button type="button" class="btn" data-action="copy-link">リンクをコピー</button>
         <button type="button" class="btn" data-action="share-link">共有…</button>
       </div>
-      <p class="muted small id-line">あなたの友だちコード: <code>${esc(L.friendCode(db.settings.myId, myPub()))}</code></p>
       <button type="button" class="btn block" data-action="copy-code">友だちコードをコピー</button>
     </div>`;
 
@@ -1388,7 +1403,7 @@
       <h3>同期</h3>
       <p class="muted small">最終確認: ${fmtTime(db.sync.lastAt)}${lastSyncOk === false ? ' ・ <span class="warn">通信できませんでした</span>' : ''}${db.outbox.length ? ` ・ 送信待ち${db.outbox.length}件` : ''}</p>
       <button type="button" class="btn block" data-action="sync-now">今すぐ同期</button>
-      <p class="muted small">結果は無料の中継サービス ntfy.sh を一時的に経由して届けます（最大12時間預かり、記録本体は各端末に保存）。相手から受け取りの返事が来るまで、アプリを開くたびに自動で再送します。メモは送りません。IDを知っている人はあなたに結果を送れるので、リンクは対戦相手にだけ渡してください。</p>
+      <p class="muted small">結果は暗号化して中継サービス ntfy.sh 経由で届けます（記録は各端末だけに保存。メモは送りません）。</p>
     </div>`;
     return html;
   }
@@ -1434,6 +1449,13 @@
   // ---------- 描画後のイベント（入力欄） ----------
 
   function afterRender() {
+    for (const el of main.querySelectorAll('[data-live-field]')) {
+      el.addEventListener('input', () => {
+        if (!live) return;
+        live[el.dataset.liveField] = el.value;
+        saveLive();
+      });
+    }
     // CSPでstyle属性を禁止しているので、幅はスクリプトから設定する
     for (const el of main.querySelectorAll('[data-w]')) el.style.width = `${Number(el.dataset.w)}%`;
     for (const el of main.querySelectorAll('[data-field]')) {
@@ -1773,28 +1795,47 @@
         toast('サーブ順を入れ替えました');
         render();
         break;
-      case 'live-discard':
-        if (confirm('この試合の記録を破棄しますか？')) {
-          live = null;
+      case 'live-discard': {
+        // 確認画面は出さず、直後のポップアップから元に戻せるようにする
+        const prev = live;
+        live = null;
+        saveLive();
+        go('list');
+        toast('試合を破棄しました', () => {
+          if (live) return; // その間に別の試合を始めていたら上書きしない
+          live = prev;
           saveLive();
-          go('list');
-        }
+          go('live');
+        });
         break;
+      }
       case 'live-save':
         saveLiveMatch();
         break;
-      case 'delete':
-        if (confirm('この試合を削除しますか？')) {
-          const gone = db.matches.find((m) => m.id === t.dataset.id);
-          db.matches = db.matches.filter((m) => m.id !== t.dataset.id);
-          // 自分の記録を消したら相手に届けた分も取り消す（相手から届いた記録はこの端末からだけ消す）
-          if (gone && !gone.received && gone.opponentId) queueDelete(gone.opponentId, gone.id);
+      case 'delete': {
+        const gone = db.matches.find((m) => m.id === t.dataset.id);
+        if (!gone) break;
+        db.matches = db.matches.filter((m) => m.id !== gone.id);
+        // 自分の記録を消したら相手に届けた分も取り消す（相手から届いた記録はこの端末からだけ消す）
+        if (!gone.received && gone.opponentId) queueDelete(gone.opponentId, gone.id);
+        saveDb();
+        sync();
+        go('list');
+        // 確認画面は出さず、直後のポップアップから元に戻せるようにする
+        toast('試合を削除しました', () => {
+          if (!gone.received && gone.opponentId) {
+            // 相手側の削除済みの印より新しくして、もう一度届ける
+            gone.updatedAt = Date.now();
+            queueMatch(gone);
+          }
+          db.matches.push(gone);
           saveDb();
           sync();
-          toast('削除しました');
-          go('list');
-        }
+          go('match', { id: gone.id });
+          toast('元に戻しました');
+        });
         break;
+      }
       case 'export':
         exportData();
         break;
@@ -1871,11 +1912,19 @@
       }
       case 'friend-remove': {
         const f = friendById(t.dataset.id);
-        if (!f || !confirm(`${f.name}さんとの連携を解除しますか？（これまでの記録は残ります）`)) break;
+        if (!f) break;
+        const waiting = db.outbox.filter((o) => o.to === f.id);
         db.friends = db.friends.filter((x) => x.id !== f.id);
         db.outbox = db.outbox.filter((o) => o.to !== f.id);
         saveDb();
         render();
+        toast(`${f.name}さんとの連携を解除しました（記録は残ります）`, () => {
+          if (!friendById(f.id)) db.friends.push(f);
+          db.outbox.push(...waiting);
+          saveDb();
+          render();
+          toast('元に戻しました');
+        });
         break;
       }
       case 'copy-code':

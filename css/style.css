@@ -338,6 +338,7 @@ button { cursor: pointer; touch-action: manipulation; }
 .flag.mp { animation: blink 1s infinite; }
 
 .live-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.live-actions .board-open { grid-column: 1 / -1; }
 
 .finished { text-align: center; }
 .finished-title { font-size: 26px; font-weight: 800; }
@@ -445,7 +446,8 @@ body.is-live .pad { min-height: 220px; }
   body.is-live .game-label { margin: 0 0 4px; font-size: 13px; }
   body.is-live .pad { min-height: 0; padding: 4px; gap: 2px; }
   body.is-live .pad-score { font-size: clamp(44px, 20vh, 96px); }
-  body.is-live .live-actions { grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 6px 0 0; }
+  body.is-live .live-actions { grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 6px 0 0; }
+  body.is-live .live-actions .board-open { grid-column: auto; }
   body.is-live .live-actions .btn { min-height: 44px; padding: 4px 8px; font-size: 13px; }
 }
 
@@ -565,3 +567,82 @@ body.is-live .pad { min-height: 220px; }
 .name-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; }
 .name-line .btn { margin-left: auto; }
 .mh-opp .link-btn { min-height: 44px; padding: 0 12px; }
+
+/* ---- 得点板（台の横に置いて両方の選手に見せる表示） ---- */
+body.is-board { background: #0b0d10; color: #fff; }
+body.is-board .main {
+  max-width: none;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.board { position: relative; height: 100%; display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+.board-halves { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.board-half {
+  container-type: size;
+  min-width: 0; min-height: 0;
+  border: 0; border-radius: 18px; color: #fff;
+  display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+  position: relative; padding: 10px; overflow: hidden;
+  -webkit-tap-highlight-color: transparent; user-select: none;
+}
+.board-half:active { filter: brightness(1.15); }
+.board-half.me { background: var(--me); }
+.board-half.opp { background: var(--opp); }
+.bh-head { position: relative; z-index: 1; width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+/* 取ったゲーム数は台の中央寄り（左の選手は右端、右の選手は左端）に置く */
+.board-half.right .bh-head { flex-direction: row-reverse; }
+.bh-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 700; font-size: 16px; font-size: clamp(14px, min(7cqh, 10cqw), 34px);
+}
+.bh-sets {
+  flex: none; min-width: 1.6em; text-align: center;
+  font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.15;
+  font-size: 28px; font-size: clamp(22px, min(15cqh, 22cqw), 72px);
+  border: 3px solid rgba(255,255,255,.7); border-radius: 12px; padding: 0 .2em;
+}
+/* 点数は下の表示（サーブ・ゲームポイント）の有無で上下にずれないよう、常に真ん中に置く */
+.bh-score {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none;
+  font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.04em;
+  font-size: 30vw; font-size: min(58cqh, 78cqw);
+}
+.bh-foot { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; min-height: 26px; }
+.bh-serve {
+  visibility: hidden; font-weight: 700; padding: 2px 12px; border-radius: 999px; background: rgba(255,255,255,.25);
+  font-size: 14px; font-size: clamp(13px, min(5cqh, 9cqw), 24px);
+}
+.bh-serve.on { visibility: visible; }
+.bh-flag {
+  background: #fff; border-radius: 999px; padding: 2px 12px; font-weight: 800;
+  font-size: 13px; font-size: clamp(12px, min(4.5cqh, 8cqw), 22px);
+}
+.board-half.me .bh-flag { color: var(--me); }
+.board-half.opp .bh-flag { color: var(--opp); }
+.bh-flag.mp { animation: blink 1s infinite; }
+.board-bar { display: flex; align-items: center; gap: 8px; }
+.board-btn {
+  flex: none; min-height: 44px; padding: 0 14px; border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.25); background: rgba(255,255,255,.08); color: #fff; font-weight: 700; font-size: 14px;
+}
+.board-btn:disabled { opacity: .4; }
+.board-game { flex: 1; min-width: 0; text-align: center; font-weight: 700; color: rgba(255,255,255,.75); display: flex; flex-direction: column; }
+.board-rotate { display: none; font-size: 11px; font-weight: 400; }
+.board-notice {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%);
+  pointer-events: none; white-space: nowrap;
+  background: rgba(0,0,0,.82); color: #fff; border-radius: 18px; padding: 14px 26px;
+  font-size: clamp(22px, 6vw, 44px); font-weight: 800;
+  animation: notice-out 3s forwards;
+}
+@keyframes notice-out { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
+
+/* 縦向きでは操作を2段にして数字を少しでも大きく */
+@media (orientation: portrait) {
+  .board-bar { flex-wrap: wrap; }
+  .board-game { order: -1; flex-basis: 100%; }
+  .board-rotate { display: block; }
+  .board-bar .board-btn { flex: 1; padding: 0 6px; font-size: 13px; }
+}

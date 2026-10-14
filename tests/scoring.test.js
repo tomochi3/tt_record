@@ -104,3 +104,19 @@ test('rallyStats', () => {
   assert.equal(st.deuceGames, 1);
   assert.equal(st.deuceWon, 1);
 });
+
+test('endChanges: ゲームごとと最終ゲームの5点でチェンジエンド', () => {
+  const ends = (bestOf, rally) => S.endChanges(S.computeMatch(bestOf, 'me', rally));
+  assert.equal(ends(5, ''), 0);
+  assert.equal(ends(5, 'm'.repeat(10)), 0);
+  assert.equal(ends(5, 'm'.repeat(11)), 1);
+  // 5ゲームマッチの第4ゲームでは5点でも入れ替えない
+  const twoAll = 'm'.repeat(11) + 'o'.repeat(11) + 'm'.repeat(11) + 'o'.repeat(11);
+  assert.equal(ends(5, 'm'.repeat(11) + 'o'.repeat(11) + 'm'.repeat(11) + 'o'.repeat(5)), 3);
+  // 最終ゲーム（第5ゲーム）はどちらかが5点に達したらもう1回
+  assert.equal(ends(5, twoAll + 'mo'.repeat(4)), 4);
+  assert.equal(ends(5, twoAll + 'mo'.repeat(4) + 'o'), 5);
+  assert.equal(ends(5, twoAll + 'o'.repeat(5) + 'm'.repeat(5)), 5);
+  // 3ゲームマッチは第3ゲームが最終ゲーム
+  assert.equal(ends(3, 'm'.repeat(11) + 'o'.repeat(11) + 'm'.repeat(5)), 3);
+});

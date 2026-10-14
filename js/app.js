@@ -112,6 +112,8 @@
         firstServer: v.firstServer === 'opp' ? 'opp' : 'me',
         rally: typeof v.rally === 'string' && /^[mo]{0,2000}$/.test(v.rally) ? v.rally : '',
         treat: TR.isNeed(v.treat) ? v.treat : 0,
+        board: v.board === true,
+        boardLeft: v.boardLeft === 'opp' ? 'opp' : 'me',
         startedAt: v.startedAt,
       };
     } catch (e) {
@@ -655,6 +657,35 @@
     toastTimer = setTimeout(() => { el.classList.remove('show', 'actionable'); toastUndo = null; }, undo ? 5000 : 2000);
   }
 
+  // 試合中は画面が消えないようにする（対応ブラウザのみ。アプリを離れるとブラウザが自動で解除する）
+  function keepAwake(on) {
+    if (!navigator.wakeLock) return;
+    if (on && !wake) {
+      const p = navigator.wakeLock.request('screen').then((lock) => {
+        lock.addEventListener('release', () => { if (wake === p) wake = null; });
+        return lock;
+      }).catch(() => {
+        if (wake === p) wake = null;
+        return null;
+      });
+      wake = p;
+    } else if (!on && wake) {
+      const p = wake;
+      wake = null;
+      p.then((lock) => { if (lock && !lock.released) lock.release(); }).catch(() => {});
+    }
+  }
+
+  // 得点板は全画面で表示する（ボタンを押したときだけ。iPhone の Safari など未対応なら何もしない）
+  function enterFullscreen() {
+    const el = document.documentElement;
+    if (!document.fullscreenElement && el.requestFullscreen) el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+  }
+
+  function exitFullscreen() {
+    if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+  }
+
   function buzz() {
     if (navigator.vibrate) navigator.vibrate(12);
   }
@@ -765,6 +796,9 @@
   let listQuery = '';
   let statsRange = 'all';
   let oppSort = 'recent'; // 対戦相手別の並び順（既定は最近対戦した順）
+  const END_NOTICE_MS = 3000;
+  let endNoticeUntil = 0; // 得点板に「チェンジエンド」を出しておく時刻
+  let wake = null; // 画面のスリープ防止（WakeLockSentinel を返す Promise）
 
   function go(v, p) {
     view = v;
@@ -810,6 +844,10 @@
     const banner = ['new', 'edit', 'live'].includes(view) ? '' : requestBanner();
     main.innerHTML = banner + (views[view] || viewList)();
     document.body.classList.toggle('is-live', view === 'live');
+    const board = !!main.querySelector('.board');
+    document.body.classList.toggle('is-board', board);
+    if (!board) exitFullscreen();
+    keepAwake(view === 'live');
     const activeTab = view === 'edit' || view === 'live' ? 'new' : view === 'match' ? 'list'
       : view === 'opponent' ? (params.from || 'stats') : view;
     for (const b of document.querySelectorAll('#tabbar button')) {
@@ -1002,6 +1040,8 @@
       <div class="game-chips">${chips}</div>
     </div>`;
 
+    if (!c.finished && live.board) return viewBoard(c);
+
     if (c.finished) {
       const win = c.winner === 'me';
       html += `<div class="card finished ${win ? 'win' : 'lose'}">
@@ -1031,12 +1071,42 @@
     html += `<div class="game-label">第${cur.gameIndex + 1}ゲーム${cur.me >= 10 && cur.opp >= 10 ? ' ・ ジュース' : ''}</div>
       <div class="pads">${pad('me')}${pad('opp')}</div>
       <div class="live-actions">
+        <button type="button" class="btn board-open" data-action="board-open">📺 得点板にする</button>
         <button type="button" class="btn" data-action="live-undo" ${live.rally.length ? '' : 'disabled'}>↶ 1点戻す</button>
         <button type="button" class="btn" data-action="live-swap-serve" title="最初のサーブを入れ替える">⇄ 先サーブを入替</button>
         <button type="button" class="btn ghost" data-action="nav" data-view="list">一時中断</button>
         <button type="button" class="btn ghost danger" data-action="live-discard">試合を破棄</button>
       </div>`;
     return html;
+  }
+
+  // 得点板：卓球台の横に置いて両方の選手に見せる表示。
+  // 左右は台のどちら側にいるかに合わせ、チェンジエンドのたびに自動で入れ替える
+  function viewBoard(c) {
+    const cur = c.current;
+    const names = { me: myName(), opp: live.opponent };
+    const sets = { me: c.mySets, opp: c.oppSets };
+    const left = S.endChanges(c) % 2 ? S.other(live.boardLeft) : live.boardLeft;
+    const half = (side, pos) => {
+      const flag = cur.matchPoint === side ? '<span class="bh-flag mp">マッチポイント</span>'
+        : cur.gamePoint === side ? '<span class="bh-flag">ゲームポイント</span>' : '';
+      return `<button type="button" class="board-half ${side} ${pos}" data-action="point" data-side="${side}" aria-label="${esc(names[side])}に1点（${cur[side]}点）">
+        <span class="bh-head"><span class="bh-name">${esc(names[side])}</span><span class="bh-sets" title="取ったゲーム数">${sets[side]}</span></span>
+        <span class="bh-score">${cur[side]}</span>
+        <span class="bh-foot"><span class="bh-serve ${cur.server === side ? 'on' : ''}">● サーブ</span>${flag}</span>
+      </button>`;
+    };
+    const notice = Date.now() < endNoticeUntil ? '<div class="board-notice" role="status">⇄ チェンジエンド</div>' : '';
+    return `<div class="board">
+      <div class="board-halves">${half(left, 'left')}${half(S.other(left), 'right')}</div>
+      <div class="board-bar">
+        <button type="button" class="board-btn" data-action="live-undo" ${live.rally.length ? '' : 'disabled'}>↶ 1点戻す</button>
+        <span class="board-game">第${cur.gameIndex + 1}ゲーム${cur.me >= 10 && cur.opp >= 10 ? '・ジュース' : ''}<span class="board-rotate">横向きにすると大きく表示されます</span></span>
+        <button type="button" class="board-btn" data-action="board-swap">⇄ 左右を入替</button>
+        <button type="button" class="board-btn" data-action="board-close">✕ 閉じる</button>
+      </div>
+      ${notice}
+    </div>`;
   }
 
   // 試合詳細
@@ -1601,6 +1671,8 @@
       firstServer: draft.firstServer,
       rally: '',
       treat: draftTreat(draft),
+      board: db.settings.board === true, // 前回得点板で使っていたら得点板で始める
+      boardLeft: 'me',
       startedAt: Date.now(),
     };
     draft = null;
@@ -1615,9 +1687,13 @@
     saveLive();
     buzz();
     const after = S.computeMatch(live.bestOf, live.firstServer, live.rally);
+    const changeEnds = !after.finished && S.endChanges(after) > S.endChanges(before);
+    if (changeEnds) endNoticeUntil = Date.now() + END_NOTICE_MS;
     if (!after.finished && after.completedGames.length > before.completedGames.length) {
       const g = after.completedGames[after.completedGames.length - 1];
       toast(`第${g.index + 1}ゲーム ${g.me}-${g.opp} ${g.winner === 'me' ? '取得' : '失う'}`);
+    } else if (changeEnds) {
+      toast('最終ゲームの5点目です。チェンジエンド');
     }
     render();
   }
@@ -1775,6 +1851,24 @@
         break;
       case 'start-live':
         startLive();
+        if (live && live.board) enterFullscreen();
+        break;
+      case 'board-open':
+      case 'board-close': {
+        if (!live) break;
+        live.board = a === 'board-open';
+        db.settings.board = live.board; // 次の試合も同じ表示で始める
+        saveLive();
+        saveDb();
+        if (live.board) enterFullscreen();
+        render();
+        break;
+      }
+      case 'board-swap':
+        if (!live) break;
+        live.boardLeft = S.other(live.boardLeft);
+        saveLive();
+        render();
         break;
       case 'point':
         addPoint(t.dataset.side);
@@ -2039,7 +2133,9 @@
     if (!['new', 'edit'].includes(view)) render();
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') sync();
+    if (document.visibilityState !== 'visible') return;
+    if (view === 'live') keepAwake(true);
+    sync();
   });
   window.addEventListener('online', () => sync());
   setInterval(() => {

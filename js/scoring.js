@@ -128,6 +128,14 @@
     };
   }
 
+  // チェンジエンドの回数：ゲームが終わるたびに1回、最終ゲームはどちらかが5点に達したときにもう1回
+  function endChanges(computed) {
+    let n = computed.completedGames.length;
+    const cur = computed.current;
+    if (cur && cur.gameIndex === computed.bestOf - 1 && Math.max(cur.me, cur.opp) >= 5) n++;
+    return n;
+  }
+
   // 1点ごとの記録から集計（サーブ/レシーブ時の得点率、最大連続得点など）
   function rallyStats(computed) {
     const s = {
@@ -179,6 +187,7 @@
     gameFirstServer,
     serverAt,
     computeMatch,
+    endChanges,
     rallyStats,
   };
 });

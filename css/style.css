@@ -12,6 +12,7 @@
   --lose: #b42318;
   --lose-bg: #fdecea;
   --chip: #eef2f7;
+  --seg-on: #ffffff;
   --radius: 14px;
   --tabbar-h: 62px;
 }
@@ -32,6 +33,7 @@
     --lose: #ff7b72;
     --lose-bg: #3a1716;
     --chip: #242a32;
+    --seg-on: #3b4552;
   }
 }
 
@@ -49,6 +51,7 @@
   --lose: #ff7b72;
   --lose-bg: #3a1716;
   --chip: #242a32;
+  --seg-on: #3b4552;
 }
 
 :root { color-scheme: light; }
@@ -74,20 +77,10 @@ body {
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; touch-action: manipulation; }
 
-.topbar {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  background: var(--primary);
-  color: #fff;
-  padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
-}
-.topbar h1 { margin: 0; font-size: 18px; font-weight: 700; }
-
 .main {
   max-width: 640px;
   margin: 0 auto;
-  padding: 16px;
+  padding: calc(16px + env(safe-area-inset-top)) 16px 16px;
 }
 
 .view-title { font-size: 20px; margin: 4px 0 14px; }
@@ -161,7 +154,8 @@ button { cursor: pointer; touch-action: manipulation; }
 
 .back {
   border: 0; background: none; color: var(--primary);
-  padding: 0 0 10px; font-weight: 600;
+  display: inline-flex; align-items: center; min-height: 44px;
+  padding: 0 16px 0 0; margin-bottom: 4px; font-weight: 600;
 }
 
 /* ---- 履歴 ---- */
@@ -266,7 +260,7 @@ button { cursor: pointer; touch-action: manipulation; }
   font-weight: 600;
   font-size: 14px;
 }
-.seg button.on { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.seg button.on { background: var(--seg-on); color: var(--text); font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.18); }
 
 .mode-switch { margin-bottom: 14px; }
 .mode-switch .seg { margin-top: 0; }
@@ -423,14 +417,36 @@ button { cursor: pointer; touch-action: manipulation; }
 .toast.actionable { pointer-events: auto; display: flex; align-items: center; gap: 12px; text-align: left; border-radius: 14px; }
 .toast-btn { border: 0; background: none; color: #8ab4ff; font-weight: 700; padding: 4px 2px; white-space: nowrap; }
 
-/* 試合中はヘッダーを隠して入力エリアを広く */
-body.is-live .topbar { display: none; }
-body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
+/* 試合中はタブを隠し、点数ボタンを画面いっぱいに広げる（誤タップ防止） */
+body.is-live { padding-bottom: 0; }
+body.is-live .tabbar { display: none; }
+body.is-live .main {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding-top: calc(12px + env(safe-area-inset-top));
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+body.is-live .pads { flex: 1; min-height: 0; }
+body.is-live .pad { min-height: 220px; }
 
-/* 横向きのスマホでは入力パッドを低めに */
+/* 横向きのスマホ：見出しを1行にまとめ、操作ボタンを横一列にして全部を1画面に収める */
 @media (orientation: landscape) and (max-height: 500px) {
-  .pad { min-height: 52vh; }
-  .pad-score { font-size: 64px; }
+  body.is-live .main {
+    max-width: none;
+    padding: calc(6px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
+  }
+  body.is-live .live-head { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 2px; }
+  body.is-live .live-sets .name { flex: none; max-width: 28vw; }
+  body.is-live .live-sets .sets { font-size: 24px; }
+  body.is-live .live-info { display: none; }
+  body.is-live .game-chips { margin-top: 0; min-height: 0; }
+  body.is-live .game-label { margin: 0 0 4px; font-size: 13px; }
+  body.is-live .pad { min-height: 0; padding: 4px; gap: 2px; }
+  body.is-live .pad-score { font-size: clamp(44px, 20vh, 96px); }
+  body.is-live .live-actions { grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 6px 0 0; }
+  body.is-live .live-actions .btn { min-height: 44px; padding: 4px 8px; font-size: 13px; }
 }
 
 /* ---- 対戦相手の候補 ---- */
@@ -438,8 +454,8 @@ body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
 .opp-suggest { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
 .opp-suggest:empty { display: none; }
 .opp-chip {
-  display: inline-flex; align-items: baseline; gap: 6px;
-  min-height: 36px; padding: 6px 12px;
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 44px; padding: 6px 12px;
   border: 1px solid var(--line); border-radius: 999px;
   background: var(--chip); color: var(--text);
   font-size: 14px; font-weight: 600;
@@ -462,7 +478,7 @@ body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
 .friend-list li:last-child { border-bottom: 0; }
 .f-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .f-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.btn.small-btn { min-height: 36px; padding: 6px 12px; font-size: 14px; }
+.btn.small-btn { min-height: 44px; min-width: 44px; padding: 6px 12px; font-size: 14px; }
 .card h3 + .muted { margin-top: 0; }
 
 /* ---- 相手ごとの成績 ---- */
@@ -490,7 +506,7 @@ body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
 /* ---- 成績: 対戦相手別 ---- */
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .card-head h3 { margin: 0; }
-.sort { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); padding: 6px 8px; font-size: 13px; }
+.sort { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); min-height: 44px; padding: 6px 8px; font-size: 13px; }
 .opp-stats { list-style: none; margin: 0; padding: 0; }
 .opp-row {
   width: 100%; display: flex; align-items: center; gap: 10px;
@@ -524,9 +540,28 @@ body.is-live .main { padding-top: calc(12px + env(safe-area-inset-top)); }
   border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text);
   padding: 10px 14px; margin-bottom: 14px; font-weight: 600; text-align: left;
 }
-.treat-banner .go { margin-left: auto; color: var(--primary); }
+.treat-banner .go { margin-left: auto; color: var(--primary); white-space: nowrap; flex: none; }
 
 .sub-title { font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
 .treat-banner .tb-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tb-line { font-size: 13px; font-weight: 400; }
 .storage-ok { color: var(--win); }
+
+/* ---- 記録フォーム ---- */
+.form-sub { margin: 0 0 10px; font-size: 14px; color: var(--muted); }
+.form-sub .opt { font-weight: 400; }
+.sticky-action {
+  position: sticky;
+  bottom: calc(var(--tabbar-h) + 10px + env(safe-area-inset-bottom));
+  z-index: 4;
+  margin-top: 4px;
+}
+.sticky-action .btn.primary { box-shadow: 0 6px 16px rgba(0,0,0,.18); }
+.finished-memo { display: block; text-align: left; font-size: 13px; font-weight: 700; color: var(--muted); margin: 0 0 12px; }
+.finished-memo textarea {
+  display: block; width: 100%; margin-top: 6px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 16px; font-weight: 400; resize: vertical;
+}
+.name-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; }
+.name-line .btn { margin-left: auto; }
+.mh-opp .link-btn { min-height: 44px; padding: 0 12px; }

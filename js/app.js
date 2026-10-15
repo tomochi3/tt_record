@@ -796,11 +796,15 @@
   let listQuery = '';
   let statsRange = 'all';
   let oppSort = 'recent'; // 対戦相手別の並び順（既定は最近対戦した順）
+  let recordsTab = 'list'; // 戦績タブで最後に見ていた画面（履歴 / 成績）
   const END_NOTICE_MS = 3000;
   let endNoticeUntil = 0; // 得点板に「チェンジエンド」を出しておく時刻
   let wake = null; // 画面のスリープ防止（WakeLockSentinel を返す Promise）
 
   function go(v, p) {
+    // 戦績タブは「履歴」と「成績」を切り替えて見る。タブを押したら最後に見ていた方を開く
+    if (v === 'records') v = recordsTab;
+    if (v === 'list' || v === 'stats') recordsTab = v;
     view = v;
     params = p || {};
     if (v === 'new') {
@@ -848,8 +852,9 @@
     document.body.classList.toggle('is-board', board);
     if (!board) exitFullscreen();
     keepAwake(view === 'live');
-    const activeTab = view === 'edit' || view === 'live' ? 'new' : view === 'match' ? 'list'
-      : view === 'opponent' ? (params.from || 'stats') : view;
+    const activeTab = view === 'edit' || view === 'live' ? 'new'
+      : ['list', 'stats', 'match'].includes(view) ? 'records'
+        : view === 'opponent' ? (params.from === 'friends' ? 'friends' : 'records') : view;
     for (const b of document.querySelectorAll('#tabbar button')) {
       b.classList.toggle('active', b.dataset.view === activeTab);
     }
@@ -884,6 +889,13 @@
     </button>`;
   }
 
+  // 戦績タブの見出しと「履歴 / 成績」の切り替え
+  function recordsHeader(cur) {
+    const tab = (v, label) => `<button type="button" role="tab" aria-selected="${v === cur}" class="${v === cur ? 'on' : ''}" data-action="nav" data-view="${v}">${label}</button>`;
+    return `<h2 class="view-title">戦績</h2>
+      <div class="seg records-switch" role="tablist">${tab('list', '履歴')}${tab('stats', '成績')}</div>`;
+  }
+
   // 履歴
   function viewList() {
     const all = sortedMatches();
@@ -893,7 +905,7 @@
       : all;
     const wins = all.filter((m) => m.mySets > m.oppSets).length;
 
-    let html = liveBanner() + '<h2 class="view-title">履歴</h2>';
+    let html = liveBanner() + recordsHeader('list');
     const owed = pendingTreats();
     const going = treatsInProgress();
     if (owed.length || going.length) {
@@ -1225,7 +1237,7 @@
 
   function viewStats() {
     const ms = sortedMatches().filter(inRange);
-    let html = `<h2 class="view-title">成績</h2>
+    let html = `${recordsHeader('stats')}
       <select id="statsRange" class="range">
         ${[['all', '全期間'], ['year', '今年'], ['90', '直近90日'], ['30', '直近30日']].map(([v, l]) =>
           `<option value="${v}" ${v === statsRange ? 'selected' : ''}>${l}</option>`).join('')}

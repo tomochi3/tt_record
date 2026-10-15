@@ -252,7 +252,7 @@ button { cursor: pointer; touch-action: manipulation; }
 }
 .seg button {
   flex: 1;
-  min-height: 40px;
+  min-height: 44px;
   border: 0;
   border-radius: 9px;
   background: transparent;
@@ -263,6 +263,7 @@ button { cursor: pointer; touch-action: manipulation; }
 .seg button.on { background: var(--seg-on); color: var(--text); font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.18); }
 
 .mode-switch { margin-bottom: 14px; }
+.records-switch { margin: 0 0 14px; }
 .mode-switch .seg { margin-top: 0; }
 .mode-switch .hint { font-size: 13px; color: var(--muted); margin: 6px 4px 0; }
 

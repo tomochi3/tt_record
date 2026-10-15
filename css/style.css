@@ -521,16 +521,20 @@ body.is-live .pad { min-height: 220px; }
 /* ---- 奢りメモ ---- */
 .chip.treat { background: transparent; padding: 0 2px; }
 .treat-status { margin-top: 8px; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
-.treat-now { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; text-align: center; margin: 4px 0 10px; }
+.treat-now { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center; text-align: center; margin: 4px 0 10px; }
 .treat-now > div { display: flex; flex-direction: column; }
 .tn-val { font-size: 32px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; }
 .tn-lbl { font-size: 12px; color: var(--muted); }
-.tn-mid { font-size: 12px; color: var(--muted); padding: 0 8px; }
 .treat-list { list-style: none; margin: 0; padding: 0; }
 .treat-item { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .treat-item:last-child { border-bottom: 0; }
-.treat-item.done .ti-main { opacity: .55; }
 .ti-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ti-amt { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.treat-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
+.treat-actions .btn { flex: 1 1 auto; min-height: 44px; }
+.offer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; margin: 0 0 10px; border-radius: 12px; background: var(--chip); font-size: 14px; }
+.offer-text { flex: 1 1 100%; }
+.offer-btns { display: flex; gap: 8px; margin-left: auto; }
 
 .sub-title { font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
 .storage-ok { color: var(--win); }

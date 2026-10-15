@@ -152,3 +152,13 @@ test('nameKey: 上限の長さで切らない（末尾の番号で区別でき�
   assert.notEqual(L.nameKey(long.slice(0, 90) + '(2)'), L.nameKey(long));
   assert.equal(L.cleanText('あ'.repeat(150)).length, 100);
 });
+
+test('decode: 奢りの相殺の提案・合意・お断り', () => {
+  const ask = L.decode(L.encode({ t: 'offset', from: A, name: '山田', key: 'o:1', id: 'abc_1', st: 'ask', amount: 9 }));
+  assert.deepEqual([ask.t, ask.id, ask.st, ask.amount], ['offset', 'abc_1', 'ask', 9]);
+  assert.equal(L.decode(L.encode({ t: 'offset', from: A, id: 'abc', st: 'ok' })).st, 'ok');
+  assert.equal(L.decode(L.encode({ t: 'offset', from: A, id: 'abc', st: 'ask', amount: 0.5 })), null);
+  assert.equal(L.decode(L.encode({ t: 'offset', from: A, id: 'abc', st: 'ask', amount: 1e9 })), null);
+  assert.equal(L.decode(L.encode({ t: 'offset', from: A, id: '<x>', st: 'ok' })), null);
+  assert.equal(L.decode(L.encode({ t: 'offset', from: A, id: 'abc', st: 'evil' })), null);
+});

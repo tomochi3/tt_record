@@ -778,10 +778,6 @@
     return out;
   }
 
-  function progressLine(p) {
-    return `${p.name}さん：自分 ${p.me}勝 - 相手 ${p.opp}勝（${p.need}勝で奢り）`;
-  }
-
   function myName() {
     return db.settings.myName || '自分';
   }
@@ -796,15 +792,13 @@
   let listQuery = '';
   let statsRange = 'all';
   let oppSort = 'recent'; // 対戦相手別の並び順（既定は最近対戦した順）
-  let recordsTab = 'list'; // 戦績タブで最後に見ていた画面（履歴 / 成績）
+  const OPP_ROWS = 5; // 対戦相手別で最初に出す人数
+  let oppAll = false;
   const END_NOTICE_MS = 3000;
   let endNoticeUntil = 0; // 得点板に「チェンジエンド」を出しておく時刻
   let wake = null; // 画面のスリープ防止（WakeLockSentinel を返す Promise）
 
   function go(v, p) {
-    // 戦績タブは「履歴」と「成績」を切り替えて見る。タブを押したら最後に見ていた方を開く
-    if (v === 'records') v = recordsTab;
-    if (v === 'list' || v === 'stats') recordsTab = v;
     view = v;
     params = p || {};
     if (v === 'new') {
@@ -843,7 +837,7 @@
   const main = document.getElementById('main');
 
   function render() {
-    const views = { list: viewList, new: viewForm, edit: viewForm, live: viewLive, match: viewMatch, stats: viewStats, opponent: viewOpponent, friends: viewFriends, settings: viewSettings };
+    const views = { list: viewList, new: viewForm, edit: viewForm, live: viewLive, match: viewMatch, opponent: viewOpponent, friends: viewFriends, settings: viewSettings };
     // 友だち申請は入力中の画面以外ならどこでも上部に出し、その場で1回押せば追加できるようにする
     const banner = ['new', 'edit', 'live'].includes(view) ? '' : requestBanner();
     main.innerHTML = banner + (views[view] || viewList)();
@@ -852,9 +846,8 @@
     document.body.classList.toggle('is-board', board);
     if (!board) exitFullscreen();
     keepAwake(view === 'live');
-    const activeTab = view === 'edit' || view === 'live' ? 'new'
-      : ['list', 'stats', 'match'].includes(view) ? 'records'
-        : view === 'opponent' ? (params.from === 'friends' ? 'friends' : 'records') : view;
+    const activeTab = view === 'edit' || view === 'live' ? 'new' : view === 'match' ? 'list'
+      : view === 'opponent' ? (params.from === 'friends' ? 'friends' : 'list') : view;
     for (const b of document.querySelectorAll('#tabbar button')) {
       b.classList.toggle('active', b.dataset.view === activeTab);
     }
@@ -889,47 +882,45 @@
     </button>`;
   }
 
-  // 戦績タブの見出しと「履歴 / 成績」の切り替え
-  function recordsHeader(cur) {
-    const tab = (v, label) => `<button type="button" role="tab" aria-selected="${v === cur}" class="${v === cur ? 'on' : ''}" data-action="nav" data-view="${v}">${label}</button>`;
-    return `<h2 class="view-title">戦績</h2>
-      <div class="seg records-switch" role="tablist">${tab('list', '履歴')}${tab('stats', '成績')}</div>`;
-  }
-
-  // 履歴
+  // 戦績：成績のまとめと試合の一覧を1ページに出す（期間の絞り込みはページ全体にかかる）
   function viewList() {
     const all = sortedMatches();
-    const q = listQuery.trim().toLowerCase();
-    const items = q
-      ? all.filter((m) => `${m.opponent} ${m.event} ${m.memo}`.toLowerCase().includes(q))
-      : all;
-    const wins = all.filter((m) => m.mySets > m.oppSets).length;
-
-    let html = liveBanner() + recordsHeader('list');
-    const owed = pendingTreats();
-    const going = treatsInProgress();
-    if (owed.length || going.length) {
-      const toMe = owed.filter((d) => d.winner === 'me').length;
-      const lines = going.slice(0, 3).map((p) => `<span class="tb-line">${esc(progressLine(p))}</span>`);
-      if (going.length > 3) lines.push(`<span class="tb-line muted">ほか${going.length - 3}人</span>`);
-      if (owed.length) lines.push(`<span class="tb-line">未済：${toMe ? `ご馳走になる ${toMe}回` : ''}${toMe && owed.length - toMe ? ' ・ ' : ''}${owed.length - toMe ? `奢る ${owed.length - toMe}回` : ''}</span>`);
-      html += `<button type="button" class="treat-banner" data-action="nav" data-view="stats"><span class="tb-body"><b>🍜 奢り</b>${lines.join('')}</span><span class="go">確認 ›</span></button>`;
-    }
-    html += `<section class="card summary">
-      <div><div class="big">${wins}<small>勝</small> ${all.length - wins}<small>敗</small></div><div class="muted">通算 ${all.length}試合</div></div>
-      <div class="rate"><div class="big">${pct(wins, all.length)}</div><div class="muted">勝率</div></div>
-    </section>`;
-
+    let html = liveBanner() + '<h2 class="view-title">戦績</h2>';
     if (!all.length) {
-      html += `<div class="empty">
+      return html + `<div class="empty">
         <p>まだ記録がありません。</p>
         <button type="button" class="btn primary" data-action="nav" data-view="new">最初の試合を記録する</button>
       </div>`;
-      return html;
     }
 
-    html += `<input type="search" class="search" id="listSearch" placeholder="相手・大会名・メモで検索" value="${esc(listQuery)}">`;
+    html += `<select id="statsRange" class="range" aria-label="期間">
+      ${[['all', '全期間'], ['year', '今年'], ['90', '直近90日'], ['30', '直近30日']].map(([v, l]) =>
+        `<option value="${v}" ${v === statsRange ? 'selected' : ''}>${l}</option>`).join('')}
+    </select>`;
+    const ms = all.filter(inRange);
+    if (!ms.length) return html + pendingTreatCard() + '<p class="empty">この期間の記録はありません。</p>';
 
+    const wins = ms.filter((m) => m.mySets > m.oppSets).length;
+    const setsWon = ms.reduce((a, m) => a + m.mySets, 0);
+    const setsLost = ms.reduce((a, m) => a + m.oppSets, 0);
+    const fullGame = ms.filter((m) => m.mySets + m.oppSets === m.bestOf);
+    const fullWins = fullGame.filter((m) => m.mySets > m.oppSets).length;
+    html += `<div class="tiles">
+      <div class="tile"><div class="t-val">${wins}-${ms.length - wins}</div><div class="t-lbl">勝-敗</div></div>
+      <div class="tile"><div class="t-val">${pct(wins, ms.length)}</div><div class="t-lbl">勝率</div></div>
+      <div class="tile"><div class="t-val">${pct(setsWon, setsWon + setsLost)}</div><div class="t-lbl">ゲーム取得率</div></div>
+      <div class="tile"><div class="t-val">${fullGame.length ? `${fullWins}-${fullGame.length - fullWins}` : '—'}</div><div class="t-lbl">最終ゲームまでもつれた試合</div></div>
+    </div>`;
+
+    html += pendingTreatCard();
+    html += opponentStats(ms);
+    html += rallyCard(ms);
+    html += eventTable(ms);
+
+    const q = listQuery.trim().toLowerCase();
+    const items = q ? ms.filter((m) => `${m.opponent} ${m.event} ${m.memo}`.toLowerCase().includes(q)) : ms;
+    html += `<h3 class="list-title">試合（${ms.length}）</h3>
+      <input type="search" class="search" id="listSearch" placeholder="相手・大会名・メモで検索" value="${esc(listQuery)}">`;
     let month = '';
     html += '<ul class="match-list">';
     for (const m of items) {
@@ -1200,7 +1191,7 @@
     </section>`;
   }
 
-  // 未済の奢り（成績タブ用）
+  // 奢りの途中経過と未済の奢り（戦績ページ用）
   function pendingTreatCard() {
     const list = pendingTreats();
     const going = treatsInProgress();
@@ -1235,54 +1226,16 @@
     return (m.date || '') >= iso;
   }
 
-  function viewStats() {
-    const ms = sortedMatches().filter(inRange);
-    let html = `${recordsHeader('stats')}
-      <select id="statsRange" class="range">
-        ${[['all', '全期間'], ['year', '今年'], ['90', '直近90日'], ['30', '直近30日']].map(([v, l]) =>
-          `<option value="${v}" ${v === statsRange ? 'selected' : ''}>${l}</option>`).join('')}
-      </select>`;
-
-    if (!ms.length) return html + '<p class="empty">この期間の記録はありません。</p>';
-
-    const wins = ms.filter((m) => m.mySets > m.oppSets).length;
-    const setsWon = ms.reduce((a, m) => a + m.mySets, 0);
-    const setsLost = ms.reduce((a, m) => a + m.oppSets, 0);
-    const fullGame = ms.filter((m) => m.mySets + m.oppSets === m.bestOf);
-    const fullWins = fullGame.filter((m) => m.mySets > m.oppSets).length;
-
-    html += `<div class="tiles">
-      <div class="tile"><div class="t-val">${ms.length}</div><div class="t-lbl">試合</div></div>
-      <div class="tile"><div class="t-val">${wins}-${ms.length - wins}</div><div class="t-lbl">勝-敗</div></div>
-      <div class="tile"><div class="t-val">${pct(wins, ms.length)}</div><div class="t-lbl">勝率</div></div>
-      <div class="tile"><div class="t-val">${pct(setsWon, setsWon + setsLost)}</div><div class="t-lbl">ゲーム取得率</div></div>
-    </div>`;
-
-    const recent = ms.slice(0, 10).reverse();
-    html += `<section class="card"><h3>直近${recent.length}試合 <span class="muted small">（左が古い）</span></h3>
-      <div class="form-dots">${recent.map((m) => `<span class="fd ${m.mySets > m.oppSets ? 'w' : 'l'}" title="${esc(m.date)} vs ${esc(m.opponent)} ${m.mySets}-${m.oppSets}">${m.mySets > m.oppSets ? '○' : '●'}</span>`).join('')}</div>
-      ${fullGame.length ? `<p class="muted small">最終ゲームまでもつれた試合: ${fullWins}勝 ${fullGame.length - fullWins}敗</p>` : ''}
-    </section>`;
-
-    html += pendingTreatCard();
-    html += opponentStats(ms);
-    html += rallyCard(ms);
-    if (ms.some((m) => m.event)) html += groupTable('大会・練習別', ms, 'event');
-    return html;
-  }
-
-  // 対戦相手ごとの成績（勝率・勝敗・ゲーム数・最終対戦日）
+  // 対戦相手ごとの成績（勝率・勝敗・最終対戦日）。多いときは上位だけ出して、残りはボタンで開く
   function opponentStats(ms) {
     const groups = new Map();
     // ms は新しい順なので、最初に出てきた試合がその相手との最終対戦
     ms.forEach((m, order) => {
       const name = (m.opponent || '').trim();
       if (!name) return;
-      const g = groups.get(name) || { name, n: 0, w: 0, sw: 0, sl: 0, last: m.date, order };
+      const g = groups.get(name) || { name, n: 0, w: 0, last: m.date, order };
       g.n++;
       if (m.mySets > m.oppSets) g.w++;
-      g.sw += m.mySets;
-      g.sl += m.oppSets;
       groups.set(name, g);
     });
     const sorters = {
@@ -1292,6 +1245,7 @@
       name: (a, b) => a.name.localeCompare(b.name, 'ja'),
     };
     const rows = [...groups.values()].sort(sorters[oppSort] || sorters.recent);
+    const shown = oppAll ? rows : rows.slice(0, OPP_ROWS);
     return `<section class="card">
       <div class="card-head"><h3>対戦相手別 <span class="muted small">（${rows.length}人）</span></h3>
         <select id="oppSort" class="sort" aria-label="並び順">
@@ -1299,15 +1253,15 @@
             `<option value="${v}" ${v === oppSort ? 'selected' : ''}>${l}</option>`).join('')}
         </select>
       </div>
-      <ul class="opp-stats">${rows.map((g) => `<li><button type="button" class="opp-row" data-action="opponent" data-name="${esc(g.name)}">
+      <ul class="opp-stats">${shown.map((g) => `<li><button type="button" class="opp-row" data-action="opponent" data-name="${esc(g.name)}">
         <span class="or-main">
           <span class="or-name">${friendByName(g.name) ? '🔗 ' : ''}${esc(g.name)}</span>
-          <span class="or-sub">${g.w}勝${g.n - g.w}敗 ・ ゲーム ${g.sw}-${g.sl} ・ 最終 ${fmtDate(g.last) || '—'}</span>
-          <span class="or-bar" aria-hidden="true"><span data-w="${Math.round((g.w / g.n) * 1000) / 10}"></span></span>
+          <span class="or-sub">${g.w}勝${g.n - g.w}敗 ・ 最終 ${fmtDate(g.last) || '—'}</span>
         </span>
         <span class="or-rate">${pct(g.w, g.n)}</span>
         <span class="or-go" aria-hidden="true">›</span>
       </button></li>`).join('')}</ul>
+      ${rows.length > shown.length ? `<button type="button" class="btn block" data-action="opp-more">ほか${rows.length - shown.length}人を表示</button>` : ''}
     </section>`;
   }
 
@@ -1377,23 +1331,22 @@
     return html;
   }
 
-  function groupTable(title, ms, key) {
+  // 大会・練習ごとの勝敗（大会名を入れていない試合は数えない）
+  function eventTable(ms) {
     const groups = new Map();
     for (const m of ms) {
-      // 大会名を入れていない試合は「大会・練習別」に出さない
-      if (key === 'event' && !(m.event || '').trim()) continue;
-      const k = (m[key] || '').trim() || '（未入力）';
-      const g = groups.get(k) || { n: 0, w: 0, sw: 0, sl: 0 };
+      const k = (m.event || '').trim();
+      if (!k) continue;
+      const g = groups.get(k) || { n: 0, w: 0 };
       g.n++;
       if (m.mySets > m.oppSets) g.w++;
-      g.sw += m.mySets;
-      g.sl += m.oppSets;
       groups.set(k, g);
     }
+    if (!groups.size) return '';
     const rows = [...groups.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0], 'ja'));
-    return `<section class="card"><h3>${title}</h3><table class="table">
-      <thead><tr><th>${key === 'opponent' ? '相手（タップで詳細）' : '名前'}</th><th>勝-敗</th><th>勝率</th><th>ゲーム</th></tr></thead>
-      <tbody>${rows.map(([k, g]) => `<tr><td>${key === 'opponent' && k !== '（未入力）' ? opponentLink(k, esc(k)) : esc(k)}</td><td>${g.w}-${g.n - g.w}</td><td>${pct(g.w, g.n)}</td><td>${g.sw}-${g.sl}</td></tr>`).join('')}</tbody>
+    return `<section class="card"><h3>大会・練習別</h3><table class="table">
+      <thead><tr><th>名前</th><th>勝-敗</th><th>勝率</th></tr></thead>
+      <tbody>${rows.map(([k, g]) => `<tr><td>${esc(k)}</td><td>${g.w}-${g.n - g.w}</td><td>${pct(g.w, g.n)}</td></tr>`).join('')}</tbody>
     </table></section>`;
   }
 
@@ -1942,6 +1895,10 @@
         });
         break;
       }
+      case 'opp-more':
+        oppAll = true;
+        render();
+        break;
       case 'export':
         exportData();
         break;

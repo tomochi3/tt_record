@@ -159,10 +159,6 @@ button { cursor: pointer; touch-action: manipulation; }
 }
 
 /* ---- 履歴 ---- */
-.summary { display: flex; justify-content: space-between; align-items: center; }
-.summary .big { font-size: 28px; font-weight: 800; line-height: 1.2; }
-.summary .big small { font-size: 15px; font-weight: 600; margin: 0 4px 0 1px; }
-.summary .rate { text-align: right; }
 
 .search {
   width: 100%;
@@ -263,7 +259,6 @@ button { cursor: pointer; touch-action: manipulation; }
 .seg button.on { background: var(--seg-on); color: var(--text); font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.18); }
 
 .mode-switch { margin-bottom: 14px; }
-.records-switch { margin: 0 0 14px; }
 .mode-switch .seg { margin-top: 0; }
 .mode-switch .hint { font-size: 13px; color: var(--muted); margin: 6px 4px 0; }
 
@@ -520,8 +515,6 @@ body.is-live .pad { min-height: 220px; }
 .or-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .or-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .or-sub { font-size: 12px; color: var(--muted); }
-.or-bar { height: 5px; border-radius: 999px; background: var(--lose-bg); overflow: hidden; }
-.or-bar span { display: block; height: 100%; background: var(--win); }
 .or-rate { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; min-width: 4.2em; text-align: right; }
 .or-go { color: var(--muted); font-size: 18px; }
 
@@ -538,16 +531,8 @@ body.is-live .pad { min-height: 220px; }
 .treat-item:last-child { border-bottom: 0; }
 .treat-item.done .ti-main { opacity: .55; }
 .ti-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.treat-banner {
-  width: 100%; display: flex; align-items: center; gap: 8px;
-  border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text);
-  padding: 10px 14px; margin-bottom: 14px; font-weight: 600; text-align: left;
-}
-.treat-banner .go { margin-left: auto; color: var(--primary); white-space: nowrap; flex: none; }
 
 .sub-title { font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
-.treat-banner .tb-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.tb-line { font-size: 13px; font-weight: 400; }
 .storage-ok { color: var(--win); }
 
 /* ---- 記録フォーム ---- */

@@ -115,8 +115,22 @@
   }
 
   // 友だちとの帳簿。mine: 自分が書いた行（相手ごと） / peer: 相手が書いた行の写し・預かり中の行・見つかった問題
+  // 第三者に見せられる証拠の束（署名つきの行・受領証の文字列だけ）
+  function sanitizePack(p) {
+    if (!p || typeof p !== 'object' || !['conflict', 'broken', 'receipt-mismatch'].includes(p.type)) return undefined;
+    const strs = (v) => (Array.isArray(v) ? v.filter((t) => typeof t === 'string' && t.length <= 8000).slice(0, 2) : []);
+    if (typeof p.keyEntry !== 'string') return undefined;
+    const out = { type: p.type, keyEntry: p.keyEntry, items: strs(p.items) };
+    if (p.type === 'receipt-mismatch') {
+      if (typeof p.myKeyEntry !== 'string') return undefined;
+      out.myKeyEntry = p.myKeyEntry;
+      out.myItems = strs(p.myItems);
+    }
+    return out;
+  }
+
   function sanitizeLedger(x) {
-    const out = { mine: {}, peer: {}, acked: {}, ots: { stamps: [], lastAt: 0, lastSig: '' } };
+    const out = { mine: {}, peer: {}, acked: {}, receipts: {}, ots: { stamps: [], lastAt: 0, lastSig: '' } };
     if (!x || typeof x !== 'object') return out;
     const arr = (v) => (Array.isArray(v) ? v : []);
     const row = (r) => (r && Number.isInteger(r.s) && typeof r.h === 'string' && typeof r.text === 'string'
@@ -132,13 +146,15 @@
         pending,
         spub: LG.isSpub(p.spub) ? p.spub : '',
         issues: arr(p.issues).filter((i) => i && typeof i.kind === 'string' && typeof i.text === 'string').slice(-50)
-          .map((i) => ({ kind: i.kind.slice(0, 20), s: Number.isInteger(i.s) ? i.s : 0, at: Number.isFinite(i.at) ? i.at : 0, text: i.text.slice(0, 300), seen: !!i.seen, evidence: arr(i.evidence).filter((t) => typeof t === 'string').slice(0, 2) })),
+          .map((i) => ({ kind: i.kind.slice(0, 20), s: Number.isInteger(i.s) ? i.s : 0, at: Number.isFinite(i.at) ? i.at : 0, text: i.text.slice(0, 300), seen: !!i.seen, evidence: arr(i.evidence).filter((t) => typeof t === 'string').slice(0, 2), pack: sanitizePack(i.pack) })),
         old: arr(p.old).map((rows) => arr(rows).map(row).filter(Boolean)).slice(-3),
       };
     }
     for (const [id, a] of Object.entries(x.acked || {})) {
-      if (L.isId(id) && a && Number.isInteger(a.s)) out.acked[id] = { s: a.s, at: Number.isFinite(a.at) ? a.at : 0, ok: !!a.ok };
+      if (L.isId(id) && a && Number.isInteger(a.s)) out.acked[id] = { s: a.s, at: Number.isFinite(a.at) ? a.at : 0, ok: !!a.ok, signed: !!a.signed };
     }
+    out.receipts = {};
+    for (const [id, t] of Object.entries(x.receipts || {})) if (L.isId(id) && typeof t === 'string' && t.length <= 600) out.receipts[id] = t;
     const o = x.ots && typeof x.ots === 'object' ? x.ots : {};
     out.ots = {
       lastAt: Number.isFinite(o.lastAt) ? o.lastAt : 0,
@@ -513,7 +529,11 @@
     stamping = true;
     try {
       o.lastTry = now;
-      const doc = LG.rootDoc(db.settings.myId, heads, new Date(now).toISOString());
+      // 誰がその状態を認めたかも分かるよう、元データに署名してから刻印する
+      const root = { app: 'tt_record', kind: 'ledger-root', v: 2, me: db.settings.myId, at: new Date(now).toISOString(), chains: heads };
+      const doc = signKey && db.settings.spub
+        ? LG.canonical(await LG.signDoc(signKey, Object.assign(root, { spub: db.settings.spub })))
+        : LG.rootDoc(db.settings.myId, heads, root.at);
       const digest = await LG.sha256(doc);
       const proofs = [];
       for (const cal of OTS_CALENDARS) {
@@ -563,7 +583,7 @@
           <button type="button" class="btn" data-action="ots-download" data-kind="ots">証明ファイル（.ots）</button>
           <button type="button" class="btn" data-action="ots-download" data-kind="json">元データ（.json）<span class="no-share">公開しないで</span></button>
         </div>
-        <p class="hint small muted">2つのファイルを opentimestamps.org の Verify に入れると、ビットコインに刻まれた日時を確認できます。</p>
+        <p class="hint small muted">2つのファイルを opentimestamps.org の Verify に入れると、ビットコインに刻まれた日時を確認できます。元データ（.json）にはこの端末の署名が入っていて、<a href="verify.html" target="_blank" rel="noopener">確認ページ</a>で誰が刻んだものかを確かめられます。</p>
         <p class="no-share-note">証明ファイル（.ots）は公開しても大丈夫です。元データ（.json）にはあなたと友だちのIDが入っているので、見せるのは関係する友だちだけにしてください。</p>`;
     } else if (on) {
       status = `<p class="small muted">${o.failed ? '刻印サーバーに接続できませんでした。1時間ほどあけて自動でやり直します。'
@@ -575,6 +595,17 @@
       <div class="field"><div class="seg" role="radiogroup">${seg}</div></div>
       ${status}
     </div>`;
+  }
+
+  // 公開鍵の指紋（確認ページの表示と見比べる用）。計算が終わったら描き直す
+  const fpCache = {};
+  function fpOf(spub) {
+    if (!LG.isSpub(spub)) return '';
+    if (!(spub in fpCache)) {
+      fpCache[spub] = '';
+      LG.fingerprint(spub).then((fp) => { fpCache[spub] = fp; if (view === 'opponent') render(); });
+    }
+    return fpCache[spub];
   }
 
   // 相手の成績ページに出す帳簿のようす（照合の結果・食い違い・最近の記録）
@@ -591,18 +622,30 @@
     const waiting = st ? Object.keys(st.pending).length : 0;
     const who = esc(f.name);
     const mineState = !mine.length ? '' : !ack ? `あなたの記録 ${mine.length}行（${who}さんの照合待ち）`
-      : ack.ok ? `あなたの記録 ${mine.length}行（${ack.s}行目まで${who}さんの写しと一致・${fmtTime(ack.at)}）`
+      : ack.ok ? `あなたの記録 ${mine.length}行（${ack.s}行目まで${who}さんの写しと一致${ack.signed ? '・署名つきの受領証あり' : ''}・${fmtTime(ack.at)}）`
         : `あなたの記録 ${mine.length}行（⚠ ${who}さんの写しと食い違い）`;
     const peerState = peer.length ? `${who}さんの記録 ${peer.length}行（署名を確認済み${waiting ? `・${waiting}行は前の行の到着待ち` : ''}）` : '';
     const items = mine.map((r) => ({ at: r.at, who: 'あなた', note: r.note }))
       .concat(peer.map((r) => ({ at: r.at, who: `${f.name}さん`, note: r.note })))
       .filter((x) => x.note).sort((a, b) => b.at - a.at).slice(0, 15);
+    const fpMine = fpOf(db.settings.spub);
+    const fpPeer = st ? fpOf(st.spub) : '';
+    // 署名つきの証拠がある食い違い（確認したあとも残す）
+    const packs = issues.map((i, n) => ({ i, n })).filter((x) => x.i.pack).slice(-5).reverse();
     return `<section class="card ledger-card">
       <h3>📒 帳簿 <span class="muted small">改ざんを検知できる記録</span></h3>
       ${open.length ? `<div class="ledger-warn">${open.map((i) => `<p>⚠ ${esc(i.text)} <span class="muted small">${fmtTime(i.at)}</span></p>`).join('')}
         <button type="button" class="btn small-btn" data-action="ledger-seen" data-id="${esc(f.id)}">確認した</button></div>` : ''}
       <p class="small ledger-state">${[mineState, peerState].filter(Boolean).map((x) => `<span>${x}</span>`).join('')}</p>
+      ${packs.length ? `<div class="ledger-evidence">
+        <p class="small"><strong>署名つきの証拠</strong> <span class="muted">第三者にも確かめてもらえるファイルです</span></p>
+        <ul>${packs.map((x) => `<li><span class="small">${esc(x.i.text)} <span class="muted">${fmtTime(x.i.at)}</span></span>
+          <button type="button" class="btn small-btn" data-action="ledger-evidence" data-id="${esc(f.id)}" data-i="${x.n}">証拠ファイルを保存<span class="no-share">公開しないで</span></button></li>`).join('')}</ul>
+        <p class="hint small muted">保存したファイルは <a href="verify.html" target="_blank" rel="noopener">確認ページ</a> に入れると、誰でも署名を確かめられます（アプリや登録は不要）。</p>
+        <p class="no-share-note">証拠ファイルにはあなたと${who}さんのIDと記録が入っています。見せるのは、話し合いに必要な人だけにしてください。</p>
+      </div>` : ''}
       ${items.length ? `<ul class="ledger-list">${items.map((x) => `<li><span class="ll-when">${fmtTime(x.at)}</span><span class="ll-who">${esc(x.who)}</span><span class="ll-what">${esc(x.note)}</span></li>`).join('')}</ul>` : ''}
+      ${fpMine || fpPeer ? `<p class="hint small muted ledger-fp">鍵の指紋：${fpMine ? `あなた ${esc(fpMine)}` : ''}${fpMine && fpPeer ? '／' : ''}${fpPeer ? `${who}さん ${esc(fpPeer)}` : ''}</p>` : ''}
     </section>`;
   }
 
@@ -628,10 +671,10 @@
   }
 
   // 食い違いなどを記録して知らせる（同じものは1回だけ）
-  function addIssue(fid, kind, s, text, evidence) {
+  function addIssue(fid, kind, s, text, evidence, pack) {
     const st = peerOf(fid);
     if (st.issues.some((i) => i.kind === kind && i.s === s && !i.seen)) return;
-    st.issues.push({ kind, s, at: Date.now(), text, seen: false, evidence: (evidence || []).slice(0, 2) });
+    st.issues.push({ kind, s, at: Date.now(), text, seen: false, evidence: (evidence || []).slice(0, 2), pack });
     st.issues = st.issues.slice(-50);
     toast(`⚠ ${text}`);
   }
@@ -722,11 +765,13 @@
       return;
     }
     if (where === 'conflict') {
-      addIssue(fid, 'conflict', s, `${friend.name}さんの帳簿の${s}行目が、前に届いた内容と違います。あとから書き換えられた可能性があります`, [st.rows[s - 1].text, text]);
+      addIssue(fid, 'conflict', s, `${friend.name}さんの帳簿の${s}行目が、前に届いた内容と違います。あとから書き換えられた可能性があります`, [st.rows[s - 1].text, text],
+        { type: 'conflict', keyEntry: st.rows[0].text, items: [st.rows[s - 1].text, text] });
       return;
     }
     if (where === 'broken') {
-      addIssue(fid, 'broken', s, `${friend.name}さんの帳簿の${s}行目が前の行とつながっていません。途中が書き換えられた可能性があります`, [text]);
+      addIssue(fid, 'broken', s, `${friend.name}さんの帳簿の${s}行目が前の行とつながっていません。途中が書き換えられた可能性があります`, [text],
+        st.rows.length ? { type: 'broken', keyEntry: st.rows[0].text, items: [st.rows[s - 2].text, text] } : undefined);
       return;
     }
     if (s === 1) {
@@ -747,7 +792,7 @@
   }
 
   // 相手の返事に入っている「こちらの帳簿の写しの最後」を、自分の帳簿と照らし合わせる
-  function checkAckHead(fid, lh) {
+  function checkAckHead(fid, lh, rcText) {
     const rows = db.ledger.mine[fid] || [];
     const f = friendById(fid);
     const name = f ? f.name : '相手';
@@ -757,8 +802,12 @@
       return;
     }
     const ok = lh.s === 0 || rows[lh.s - 1].h === lh.h;
-    if (!ok) addIssue(fid, 'mismatch', lh.s, `${name}さんの端末にあるあなたの記録の${lh.s}行目が、この端末の帳簿と違います。どちらかの記録が書き換えられた可能性があります`);
-    db.ledger.acked[fid] = { s: lh.s, at: Date.now(), ok };
+    const st = db.ledger.peer[fid];
+    // 署名つきの受領証なら、相手の署名と自分の行をそのまま証拠にできる
+    const pack = !ok && rcText && st && st.rows.length && rows.length
+      ? { type: 'receipt-mismatch', keyEntry: st.rows[0].text, items: [rcText], myKeyEntry: rows[0].text, myItems: [rows[lh.s - 1].text] } : undefined;
+    if (!ok) addIssue(fid, 'mismatch', lh.s, `${name}さんの端末にあるあなたの記録の${lh.s}行目が、この端末の帳簿と違います。どちらかの記録が書き換えられた可能性があります`, [], pack);
+    db.ledger.acked[fid] = { s: lh.s, at: Date.now(), ok, signed: !!rcText };
     // 相手の写しが途中で止まっている（届いたあとに失われた）なら、続きを送り直す（1行につき3回まで）
     for (let i = lh.s; i < rows.length && i < lh.s + 20; i++) {
       if (db.outbox.some((o) => o.to === fid && o.ref === `L:${rows[i].s}`)) break;
@@ -832,7 +881,7 @@
     }
     if (msg.t === 'ack') {
       db.outbox = db.outbox.filter((o) => !(o.to === msg.from && msg.keys.includes(o.key)));
-      if (msg.lh) checkAckHead(msg.from, msg.lh);
+      if (msg.lh) checkAckHead(msg.from, msg.lh, msg.rcText);
       return null;
     }
     if (msg.t === 'del') {
@@ -999,8 +1048,11 @@
       // 受け取った相手の帳簿の写しの最後も伝えて、相手の手元の帳簿と照らし合わせてもらう
       const rows = db.ledger.peer[to] ? db.ledger.peer[to].rows : [];
       const lh = rows.length ? { s: rows.length, h: rows[rows.length - 1].h } : undefined;
+      // 「あなたの帳簿を何行目まで、この内容で受け取った」に署名した受領証。あとから受け取っていないとは言えなくなる
+      const rc = lh && signKey
+        ? await LG.signDoc(signKey, { app: 'tt_record', kind: 'receipt', by: db.settings.myId, chainOf: to, s: lh.s, h: lh.h, at: Date.now() }) : undefined;
       try {
-        await post(to, await sealFor(f, L.encode({ t: 'ack', from: db.settings.myId, name: myName(), keys, lh })));
+        await post(to, await sealFor(f, L.encode({ t: 'ack', from: db.settings.myId, name: myName(), keys, lh, rc })));
       } catch (e) {
         /* 返事が届かなくても相手が再送してくるので、そのときにまた返す */
       }
@@ -1065,6 +1117,15 @@
       addAck(acks, from, msg.key);
       await receiveEntry(friend, msg, text);
       return true;
+    }
+    if (msg.t === 'ack' && msg.rc && friend) {
+      const st = db.ledger.peer[from];
+      const rc = msg.rc;
+      if (st && st.spub && rc.by === from && rc.chainOf === db.settings.myId && await LG.verifyDoc(st.spub, rc)) {
+        msg.lh = { s: rc.s, h: rc.h };
+        msg.rcText = JSON.stringify(rc);
+        db.ledger.receipts[from] = msg.rcText;
+      }
     }
     addAck(acks, from, applyMessage(msg, Date.now()));
     return true;
@@ -2453,6 +2514,18 @@
         if (st) for (const i of st.issues) i.seen = true;
         saveDb();
         render();
+        break;
+      }
+      case 'ledger-evidence': {
+        const st = db.ledger.peer[t.dataset.id];
+        const issue = st && st.issues[Number(t.dataset.i)];
+        if (!issue || !issue.pack) break;
+        const ev = Object.assign({ app: 'tt_record', kind: 'evidence' }, issue.pack, {
+          found: new Date(issue.at).toISOString(),
+          text: issue.text,
+          howToCheck: 'https://tomochi3.github.io/tt_record/verify.html にこのファイルを入れると、署名を確かめられます',
+        });
+        downloadBlob(new Blob([JSON.stringify(ev, null, 2)], { type: 'application/json' }), `tt-record-evidence-${isoOf(issue.at)}-${issue.s}.json`);
         break;
       }
       case 'ots-setting':

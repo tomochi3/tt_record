@@ -85,3 +85,59 @@ test('OpenTimestamps: .ots ファイルの形と元データ', async () => {
   assert.deepEqual(Buffer.from(ots.slice(magic.length + 2, magic.length + 34)), Buffer.from(digest));
   assert.deepEqual(Buffer.from(ots.slice(magic.length + 34)), Buffer.from(reply));
 });
+
+test('署名つきの文書: 受領証を確かめられ、書き換えると失敗する', async () => {
+  const k = await G.generateSigningKeys();
+  const rc = await G.signDoc(k.spriv, { app: 'tt_record', kind: 'receipt', by: B, chainOf: A, s: 3, h: 'x'.repeat(43), at: 1 });
+  assert.equal(await G.verifyDoc(k.spub, rc), true);
+  assert.equal(await G.verifyDoc(k.spub, JSON.parse(JSON.stringify(rc))), true);
+  assert.equal(await G.verifyDoc(k.spub, Object.assign({}, rc, { s: 4 })), false);
+  assert.match(await G.fingerprint(k.spub), /^[A-Za-z0-9_-]{4}(-[A-Za-z0-9_-]{4}){3}$/);
+});
+
+async function chainOf(keys, from, to) {
+  const key = await G.sign(keys.spriv, { v: 1, from, t: 'key', spub: keys.spub, L: { s: 1, p: '', at: 1, to } });
+  return { key, h1: await G.entryHash(key) };
+}
+
+test('証拠ファイル: 書き換え（同じ番号に2つ）を第三者が確かめられる', async () => {
+  const k = await G.generateSigningKeys();
+  const { key, h1 } = await chainOf(k, A, B);
+  const a = await G.sign(k.spriv, { v: 1, from: A, t: 'match', m: { id: 'm', mySets: 3, oppSets: 1 }, L: { s: 2, p: h1, at: 2, to: B } });
+  const b = await G.sign(k.spriv, { v: 1, from: A, t: 'match', m: { id: 'm', mySets: 1, oppSets: 3 }, L: { s: 2, p: h1, at: 3, to: B } });
+  const ev = { app: 'tt_record', kind: 'evidence', type: 'conflict', keyEntry: JSON.stringify(key), items: [JSON.stringify(a), JSON.stringify(b)] };
+  const r = await G.checkEvidence(JSON.parse(JSON.stringify(ev)));
+  assert.equal(r.ok, true, r.why);
+  assert.equal(r.s, 2);
+  // 同じ内容なら証拠にならない
+  assert.equal((await G.checkEvidence(Object.assign({}, ev, { items: [JSON.stringify(a), JSON.stringify(a)] }))).ok, false);
+  // 別の鍵で作った偽の行は証拠にならない
+  const other = await G.generateSigningKeys();
+  const fake = await G.sign(other.spriv, JSON.parse(JSON.stringify(b)));
+  assert.equal((await G.checkEvidence(Object.assign({}, ev, { items: [JSON.stringify(a), JSON.stringify(fake)] }))).ok, false);
+});
+
+test('証拠ファイル: つながらない行・受領証の食い違い', async () => {
+  const ka = await G.generateSigningKeys();
+  const kb = await G.generateSigningKeys();
+  const { key: keyA, h1 } = await chainOf(ka, A, B);
+  const a2 = await G.sign(ka.spriv, { v: 1, from: A, t: 'del', id: 'm', L: { s: 2, p: h1, at: 2, to: B } });
+  const a3 = await G.sign(ka.spriv, { v: 1, from: A, t: 'del', id: 'n', L: { s: 3, p: h1, at: 3, to: B } });
+  const broken = { app: 'tt_record', kind: 'evidence', type: 'broken', keyEntry: JSON.stringify(keyA), items: [JSON.stringify(a2), JSON.stringify(a3)] };
+  assert.equal((await G.checkEvidence(broken)).ok, true);
+  // B の受領証：A の2行目は別のハッシュだった、と署名
+  const { key: keyB } = await chainOf(kb, B, A);
+  const rc = await G.signDoc(kb.spriv, { app: 'tt_record', kind: 'receipt', by: B, chainOf: A, s: 2, h: 'y'.repeat(43), at: 5 });
+  const mm = { app: 'tt_record', kind: 'evidence', type: 'receipt-mismatch', keyEntry: JSON.stringify(keyB), items: [JSON.stringify(rc)], myKeyEntry: JSON.stringify(keyA), myItems: [JSON.stringify(a2)] };
+  assert.equal((await G.checkEvidence(mm)).ok, true);
+  const same = await G.signDoc(kb.spriv, Object.assign({}, rc, { h: await G.entryHash(a2), g: undefined }));
+  assert.equal((await G.checkEvidence(Object.assign({}, mm, { items: [JSON.stringify(same)] }))).ok, false);
+});
+
+test('刻印の元データ: 署名つきなら確かめられる', async () => {
+  const k = await G.generateSigningKeys();
+  const doc = await G.signDoc(k.spriv, { app: 'tt_record', kind: 'ledger-root', v: 2, me: A, at: 't', spub: k.spub, chains: [] });
+  const text = G.canonical(doc);
+  assert.equal((await G.checkRoot(JSON.parse(text))).ok, true);
+  assert.equal((await G.checkRoot(Object.assign(JSON.parse(text), { at: 'u' }))).ok, false);
+});

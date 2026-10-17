@@ -198,6 +198,10 @@
         const out = Object.assign(base, { keys: d.keys.filter((k) => typeof k === 'string' && k.length <= 80).slice(0, 200) });
         // 受け取った側が持っている、こちらの帳簿の写しの最後（照合用）
         if (d.lh && Number.isInteger(d.lh.s) && d.lh.s >= 0 && typeof d.lh.h === 'string' && d.lh.h.length <= 43) out.lh = { s: d.lh.s, h: d.lh.h };
+        // 同じ内容に受け取った側が署名した受領証（形だけ確かめ、署名はアプリ側で確かめる）
+        const rc = d.rc;
+        if (rc && typeof rc === 'object' && rc.kind === 'receipt' && Number.isInteger(rc.s) && rc.s >= 1 && typeof rc.h === 'string' &&
+          rc.h.length <= 43 && typeof rc.g === 'string' && JSON.stringify(rc).length <= 600) out.rc = rc;
         return out;
       }
       default:

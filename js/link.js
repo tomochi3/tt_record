@@ -163,6 +163,9 @@
     if (!d || typeof d !== 'object' || d.v !== VERSION || !isId(d.from)) return null;
     const key = typeof d.key === 'string' && d.key.length <= 80 ? d.key : '';
     const base = { t: d.t, from: d.from, name: cleanText(d.name), key };
+    // 帳簿の行（通し番号・前の行のハッシュ・署名）がついていれば、検証用に元の形のまま渡す
+    if (d.L && typeof d.L === 'object') base.raw = d;
+    const okId = (x) => typeof x === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(x);
     switch (d.t) {
       case 'hello':
         return base;
@@ -181,10 +184,22 @@
         if (typeof d.id !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(d.id) || !['ask', 'ok', 'no'].includes(d.st)) return null;
         if (d.st === 'ask' && !(Number.isInteger(d.amount) && d.amount > 0 && d.amount <= 6000)) return null;
         return Object.assign(base, { id: d.id, st: d.st, amount: d.st === 'ask' ? d.amount : 0 });
-      case 'ack':
-        return Array.isArray(d.keys)
-          ? Object.assign(base, { keys: d.keys.filter((k) => typeof k === 'string' && k.length <= 80).slice(0, 200) })
-          : null;
+      case 'key':
+        // 帳簿の1行目：この相手との帳簿に使う署名用の公開鍵
+        return typeof d.spub === 'string' && /^[A-Za-z0-9_-]{87}$/.test(d.spub) ? Object.assign(base, { spub: d.spub }) : null;
+      case 'treat':
+        // 奢った(paid) / 奢ってもらった(got) の記録。amount は 1奢り=6 の整数
+        return okId(d.id) && ['paid', 'got'].includes(d.kind) && Number.isInteger(d.amount) && d.amount > 0 && d.amount <= 6000
+          ? Object.assign(base, { id: d.id, kind: d.kind, amount: d.amount }) : null;
+      case 'treat-del':
+        return okId(d.id) ? Object.assign(base, { id: d.id }) : null;
+      case 'ack': {
+        if (!Array.isArray(d.keys)) return null;
+        const out = Object.assign(base, { keys: d.keys.filter((k) => typeof k === 'string' && k.length <= 80).slice(0, 200) });
+        // 受け取った側が持っている、こちらの帳簿の写しの最後（照合用）
+        if (d.lh && Number.isInteger(d.lh.s) && d.lh.s >= 0 && typeof d.lh.h === 'string' && d.lh.h.length <= 43) out.lh = { s: d.lh.s, h: d.lh.h };
+        return out;
+      }
       default:
         return null;
     }

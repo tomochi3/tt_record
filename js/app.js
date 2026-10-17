@@ -2028,7 +2028,22 @@
         <label class="btn block file-btn">インポート（JSON）<input type="file" id="importFile" accept="application/json,.json"></label>
         <button type="button" class="btn block danger" data-action="wipe">すべての記録を削除</button>
       </div>
-      <p class="muted small center">保存済み ${db.matches.length}試合</p>`;
+      <p class="muted small center">保存済み ${db.matches.length}試合</p>
+      ${supportCard()}`;
+  }
+
+  // 設定タブのいちばん下に出す、開発者の応援のお願い（押さなくても使える）
+  function supportCard() {
+    const link = (href, label) => `<li><a href="${href}" target="_blank" rel="noopener noreferrer sponsored">${label}</a></li>`;
+    return `<section class="card support-card">
+      <h3>🎁 利用料について</h3>
+      <p class="small">利用料は無料です！</p>
+      <p class="small muted">もし「応援してもいいよ」という方がいれば、募金感覚で下記のリンクをご利用いただけると嬉しいです 🙏</p>
+      <ul class="small">
+        ${link('https://www.amazon.co.jp?&amp;linkCode=ll2&amp;tag=mokumoku0a-22&amp;linkId=164404febe06b273f3db5be4519c9761&amp;ref_=as_li_ss_tl', 'Amazonはこちら')}
+        ${link('https://item.rakuten.co.jp/rakutenoriginal-daily/ro-b-001/', '楽天市場はこちら')}
+      </ul>
+    </section>`;
   }
 
   // ---------- 描画後のイベント（入力欄） ----------

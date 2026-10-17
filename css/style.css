@@ -679,3 +679,10 @@ body.is-board .main {
 .verify-result.ok { border-left: 4px solid var(--win); }
 .verify-result.ng { border-left: 4px solid var(--lose); }
 .verify-result p { overflow-wrap: anywhere; }
+
+/* ---- 開発者の応援（設定タブの最下部） ---- */
+.support-card { margin-top: 24px; }
+.support-card h3 { font-size: 15px; }
+.support-card p { margin: 0 0 6px; }
+.support-card ul { margin: 6px 0 0; padding-left: 1.2em; }
+.support-card li { margin: 4px 0; }

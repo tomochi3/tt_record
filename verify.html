@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <!-- ファイルは端末の中だけで確かめる（どこにも送らない） -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>証拠の確認</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <script src="js/theme.js"></script>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main class="main verify-page">
+    <h1>証拠の確認 <span class="muted small">卓球戦績メモ</span></h1>
+    <section class="card">
+      <p>卓球戦績メモで保存した「証拠ファイル」や刻印の「元データ（.json）」の署名を確かめます。アプリを入れていなくても、誰でも使えます。</p>
+      <label class="verify-drop" id="drop">
+        <input type="file" id="file" accept=".json,application/json">
+        <span>ここにファイルをドロップ、またはタップして選ぶ</span>
+      </label>
+      <p class="hint small muted">ファイルはこの端末の中だけで確かめます。どこにも送りません。</p>
+    </section>
+    <div id="result" aria-live="polite"></div>
+    <section class="card small muted">
+      <h3>何を確かめているか</h3>
+      <p>帳簿の1行1行には、書いた人の端末だけが持つ鍵で署名がついています。署名は書いた人以外には作れず、内容を1文字でも変えると合わなくなります。</p>
+      <p>証拠ファイルは「同じ人の鍵が、同じ行に違う内容を署名した」などの組み合わせです。この組み合わせは、その鍵の持ち主が記録を書き換えない限り生まれません。</p>
+      <p>刻印の元データの日時（ビットコインに刻まれた時刻）は、<a href="https://opentimestamps.org/" target="_blank" rel="noopener">opentimestamps.org</a> の Verify に .ots ファイルと一緒に入れて確かめてください。</p>
+    </section>
+    <p class="small"><a href="./">‹ 卓球戦績メモを開く</a></p>
+  </main>
+  <script src="js/ledger.js"></script>
+  <script src="js/verify.js"></script>
+</body>
+</html>

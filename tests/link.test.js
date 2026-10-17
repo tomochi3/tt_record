@@ -178,3 +178,10 @@ test('decode: 帳簿の行・奢りの記録・照合つきの返事', () => {
   const ack = L.decode(L.encode({ t: 'ack', from: A, keys: ['e:1'], lh: { s: 3, h: 'h'.repeat(43) } }));
   assert.deepEqual(ack.lh, { s: 3, h: 'h'.repeat(43) });
 });
+
+test('decode: 返事に入った署名つきの受領証', () => {
+  const rc = { app: 'tt_record', kind: 'receipt', by: A, chainOf: B, s: 2, h: 'h'.repeat(43), at: 1, g: 'g'.repeat(86) };
+  assert.deepEqual(L.decode(L.encode({ t: 'ack', from: A, keys: [], rc })).rc, rc);
+  assert.equal(L.decode(L.encode({ t: 'ack', from: A, keys: [], rc: Object.assign({}, rc, { pad: 'x'.repeat(900) }) })).rc, undefined);
+  assert.equal(L.decode(L.encode({ t: 'ack', from: A, keys: [], rc: Object.assign({}, rc, { kind: 'x' }) })).rc, undefined);
+});

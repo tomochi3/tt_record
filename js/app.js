@@ -561,9 +561,10 @@
       status = `<p class="small">最新の刻印：${fmtTime(last.at)}（${last.proofs.length}か所の刻印サーバーに依頼済み。数時間後にビットコインのブロックに入ります）</p>
         <div class="row-actions">
           <button type="button" class="btn" data-action="ots-download" data-kind="ots">証明ファイル（.ots）</button>
-          <button type="button" class="btn" data-action="ots-download" data-kind="json">元データ（.json）</button>
+          <button type="button" class="btn" data-action="ots-download" data-kind="json">元データ（.json）<span class="no-share">公開しないで</span></button>
         </div>
-        <p class="hint small muted">2つのファイルを opentimestamps.org の Verify に入れると、ビットコインに刻まれた日時を確認できます。</p>`;
+        <p class="hint small muted">2つのファイルを opentimestamps.org の Verify に入れると、ビットコインに刻まれた日時を確認できます。</p>
+        <p class="no-share-note">証明ファイル（.ots）は公開しても大丈夫です。元データ（.json）にはあなたと友だちのIDが入っているので、見せるのは関係する友だちだけにしてください。</p>`;
     } else if (on) {
       status = `<p class="small muted">${o.failed ? '刻印サーバーに接続できませんでした。1時間ほどあけて自動でやり直します。'
         : ledgerHeads().length ? '次の同期で刻印します。' : '友だちとの帳簿ができたら刻印します。'}</p>`;
@@ -1897,8 +1898,9 @@
       <button type="button" class="btn small-btn" data-action="nav" data-view="settings">設定で変更</button></p>`;
 
     html += `<div class="card">
-      <h3>あなたの友だちリンク</h3>
+      <h3>あなたの友だちリンク <span class="no-share">公開しないで</span></h3>
       <p class="muted small">対戦相手にこのQRコードを読み取ってもらうか、リンクを送って開いてもらうと連携できます。連携は最初の1回だけでOKです。</p>
+      <p class="no-share-note">リンク・QRコード・友だちコードは対戦相手にだけ渡してください。SNSなどに載せると、誰でもあなたに友だち申請を送れるようになります。</p>
       ${unnamed ? '<p class="warn small">先に上で名前を入れておくと、相手のアプリにその名前で表示されます。</p>' : ''}
       <div class="qr">${qrSvg(myLink())}</div>
       <div class="row-actions">
@@ -1960,7 +1962,8 @@
         <h3>データ</h3>
         <p class="muted small">記録はこの端末のブラウザ内に保存されます。機種変更やバックアップにはエクスポートを使ってください。</p>
         ${storageNote()}
-        <button type="button" class="btn block" data-action="export">エクスポート（JSON）</button>
+        <button type="button" class="btn block" data-action="export">エクスポート（JSON）<span class="no-share">公開しないで</span></button>
+        <p class="no-share-note">エクスポートしたファイルには、試合の記録・メモ・友だちの一覧が入っています。自分のバックアップ用にだけ使ってください。</p>
         <label class="btn block file-btn">インポート（JSON）<input type="file" id="importFile" accept="application/json,.json"></label>
         <button type="button" class="btn block danger" data-action="wipe">すべての記録を削除</button>
       </div>

@@ -357,3 +357,14 @@ npm test         # テスト
 - `js/link.js` — 友だち連携の暗号化（ECDH P-256 + AES-GCM）と、受け取ったメッセージの検証
 - `js/ledger.js` — 帳簿（キー順をそろえた JSON・ハッシュ・ECDSA 署名・行の位置の判定）、署名つきの受領証・証拠ファイルの検証、OpenTimestamps の .ots 形式。DOMに依存しない純粋関数
 - `verify.html` / `js/verify.js` — 証拠ファイル・刻印の元データを第三者が確かめる確認ページ（通信しない）
+
+---
+
+## 🎁 利用料について
+
+利用料は無料です！
+
+もし「応援してもいいよ」という方がいれば、募金感覚で下記のリンクをご利用いただけると嬉しいです 🙏
+
+- [Amazonはこちら](https://www.amazon.co.jp?&linkCode=ll2&tag=mokumoku0a-22&linkId=164404febe06b273f3db5be4519c9761&ref_=as_li_ss_tl)
+- [楽天市場はこちら](https://item.rakuten.co.jp/rakutenoriginal-daily/ro-b-001/)

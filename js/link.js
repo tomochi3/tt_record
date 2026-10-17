@@ -273,7 +273,7 @@
     if (isId(m.opponentId)) out.opponentId = m.opponentId;
     const ref = (r) => r && typeof r === 'object' && isId(r.from) && typeof r.id === 'string' && r.id.length <= 40;
     if (ref(m.received)) out.received = { from: m.received.from, id: m.received.id, rev: Number.isFinite(m.received.rev) ? m.received.rev : 0 };
-    if (ref(m.remote)) out.remote = { from: m.remote.from, id: m.remote.id };
+    if (ref(m.remote)) out.remote = Object.assign({ from: m.remote.from, id: m.remote.id }, Number.isFinite(m.remote.rev) ? { rev: m.remote.rev } : {});
     return out;
   }
 

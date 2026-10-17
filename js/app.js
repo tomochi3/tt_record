@@ -20,6 +20,7 @@
 
   const S = window.TTScoring;
   const TR = window.TTTreat;
+  const LG = window.TTLedger;
   const L = window.TTLink;
   const NTFY = 'https://ntfy.sh';
   // ntfy.sh は届いたメッセージを12時間しか預からない。相手が数日アプリを開かなくても届くよう、
@@ -38,7 +39,7 @@
   function loadDb() {
     const empty = {
       settings: { myName: '自分' }, matches: [], friends: [], outbox: [], requests: [], blocked: [], treatLog: [], offers: [],
-      sync: { since: 0, seen: [], tomb: {}, offersDone: [] },
+      sync: { since: 0, seen: [], tomb: {}, offersDone: [] }, ledger: sanitizeLedger(null),
     };
     let d = null;
     try {
@@ -52,8 +53,8 @@
     const out = d && typeof d === 'object' ? {
       settings: Object.assign({}, empty.settings, d.settings && typeof d.settings === 'object' ? d.settings : {}),
       matches: arr(d.matches).map(L.sanitizeMatch).filter(Boolean),
-      treatLog: arr(d.treatLog).filter(TR.isLogEntry)
-        .map((e) => ({ id: typeof e.id === 'string' ? e.id.slice(0, 40) : uid(), name: cleanName(e.name), kind: e.kind, amount: e.amount, at: Number.isFinite(e.at) ? e.at : 0 })),
+      treatLog: arr(d.treatLog).filter(TR.isLogEntry).map(sanitizeTreatEntry),
+      ledger: sanitizeLedger(d.ledger),
       offers: arr(d.offers).filter((o) => o && L.isId(o.friendId) && ['in', 'out'].includes(o.dir) && typeof o.id === 'string' &&
         /^[A-Za-z0-9_-]{1,40}$/.test(o.id) && Number.isInteger(o.amount) && o.amount > 0 && o.amount <= 6000)
         .map((o) => ({ id: o.id, dir: o.dir, friendId: o.friendId, name: cleanName(o.name), amount: o.amount, at: Number.isFinite(o.at) ? o.at : 0 })),
@@ -88,7 +89,7 @@
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
         version: 1, settings: db.settings, matches: db.matches, friends: db.friends, outbox: db.outbox,
-        requests: db.requests, blocked: db.blocked, sync: db.sync, treatLog: db.treatLog, offers: db.offers,
+        requests: db.requests, blocked: db.blocked, sync: db.sync, treatLog: db.treatLog, offers: db.offers, ledger: db.ledger,
       }));
     } catch (e) {
       toast('保存に失敗しました');
@@ -97,6 +98,57 @@
 
   function cleanName(v) {
     return L.cleanText(v);
+  }
+
+  // 奢りの記録。shared: 友だちとの帳簿にも書いた / from・rid: 友だちの帳簿から届いた / paired: 同じ1回を2人とも記録した相手側の記録
+  function sanitizeTreatEntry(e) {
+    const out = { id: typeof e.id === 'string' ? e.id.slice(0, 80) : uid(), name: cleanName(e.name), kind: e.kind, amount: e.amount, at: Number.isFinite(e.at) ? e.at : 0 };
+    if (L.isId(e.shared)) out.shared = e.shared;
+    if (L.isId(e.from) && typeof e.rid === 'string') {
+      out.from = e.from;
+      out.rid = e.rid.slice(0, 80);
+    }
+    if (e.paired && L.isId(e.paired.from) && typeof e.paired.id === 'string' && TR.isLogEntry(Object.assign({ name: 'x' }, e.paired))) {
+      out.paired = { id: e.paired.id.slice(0, 80), from: e.paired.from, kind: e.paired.kind, amount: e.paired.amount, at: Number.isFinite(e.paired.at) ? e.paired.at : 0 };
+    }
+    return out;
+  }
+
+  // 友だちとの帳簿。mine: 自分が書いた行（相手ごと） / peer: 相手が書いた行の写し・預かり中の行・見つかった問題
+  function sanitizeLedger(x) {
+    const out = { mine: {}, peer: {}, acked: {}, ots: { stamps: [], lastAt: 0, lastSig: '' } };
+    if (!x || typeof x !== 'object') return out;
+    const arr = (v) => (Array.isArray(v) ? v : []);
+    const row = (r) => (r && Number.isInteger(r.s) && typeof r.h === 'string' && typeof r.text === 'string'
+      ? { s: r.s, h: r.h.slice(0, 43), at: Number.isFinite(r.at) ? r.at : 0, text: r.text, note: typeof r.note === 'string' ? r.note.slice(0, 200) : '', resent: Number.isInteger(r.resent) ? r.resent : 0 }
+      : null);
+    for (const [id, rows] of Object.entries(x.mine || {})) if (L.isId(id)) out.mine[id] = arr(rows).map(row).filter(Boolean);
+    for (const [id, p] of Object.entries(x.peer || {})) {
+      if (!L.isId(id) || !p || typeof p !== 'object') continue;
+      const pending = {};
+      for (const [k, v] of Object.entries(p.pending || {}).slice(0, 100)) if (/^\d+$/.test(k) && typeof v === 'string') pending[k] = v;
+      out.peer[id] = {
+        rows: arr(p.rows).map(row).filter(Boolean),
+        pending,
+        spub: LG.isSpub(p.spub) ? p.spub : '',
+        issues: arr(p.issues).filter((i) => i && typeof i.kind === 'string' && typeof i.text === 'string').slice(-50)
+          .map((i) => ({ kind: i.kind.slice(0, 20), s: Number.isInteger(i.s) ? i.s : 0, at: Number.isFinite(i.at) ? i.at : 0, text: i.text.slice(0, 300), seen: !!i.seen, evidence: arr(i.evidence).filter((t) => typeof t === 'string').slice(0, 2) })),
+        old: arr(p.old).map((rows) => arr(rows).map(row).filter(Boolean)).slice(-3),
+      };
+    }
+    for (const [id, a] of Object.entries(x.acked || {})) {
+      if (L.isId(id) && a && Number.isInteger(a.s)) out.acked[id] = { s: a.s, at: Number.isFinite(a.at) ? a.at : 0, ok: !!a.ok };
+    }
+    const o = x.ots && typeof x.ots === 'object' ? x.ots : {};
+    out.ots = {
+      lastAt: Number.isFinite(o.lastAt) ? o.lastAt : 0,
+      lastTry: Number.isFinite(o.lastTry) ? o.lastTry : 0,
+      failed: !!o.failed,
+      lastSig: typeof o.lastSig === 'string' ? o.lastSig.slice(0, 4000) : '',
+      stamps: arr(o.stamps).filter((t) => t && typeof t.doc === 'string' && Array.isArray(t.proofs)).slice(-30)
+        .map((t) => ({ at: Number.isFinite(t.at) ? t.at : 0, doc: t.doc, proofs: t.proofs.filter((q) => q && typeof q.cal === 'string' && typeof q.b64 === 'string').slice(0, 4) })),
+    };
+    return out;
   }
 
   function sanitizeFriend(f) {
@@ -267,6 +319,7 @@
   // 秘密鍵は「取り出し不可」の CryptoKey のまま IndexedDB に保存する（localStorage には公開鍵だけ）。
   // 同じ場所で動くスクリプトでも鍵の中身は読み出せないので、ファイルに書き出したり持ち去ったりできない
   let privKey = null;
+  let signKey = null; // 帳簿の署名用（ECDSA・取り出し不可）
   const IDB_NAME = 'ttrecord';
 
   function idb(mode, fn) {
@@ -310,6 +363,20 @@
           const legacy = await L.generateKeys(true);
           privKey = await L.importPrivateJwk(legacy.priv);
           db.settings.keys = legacy;
+        }
+      }
+      // 帳簿の署名鍵（IndexedDB が使えない環境では帳簿なしで従来どおり送る）
+      const sk = await idb('readonly', (st) => st.get('signing'));
+      if (sk && LG.isSpub(sk.spub) && sk.spriv) {
+        signKey = sk.spriv;
+        db.settings.spub = sk.spub;
+      } else {
+        const fresh = await LG.generateSigningKeys();
+        if (await idb('readwrite', (st) => st.put(fresh, 'signing'))) {
+          // 鍵を作り直したら（ブラウザのデータが一部消えた場合など）、自分の帳簿もはじめから書き直す
+          if (db.settings.spub && db.settings.spub !== fresh.spub) db.ledger.mine = {};
+          signKey = fresh.spriv;
+          db.settings.spub = fresh.spub;
         }
       }
       saveDb();
@@ -379,23 +446,325 @@
     for (const o of db.offers) if (o.friendId === friend.id) o.name = friend.name;
   }
 
-  function queueMatch(m) {
+  // ---------- 帳簿（改ざんを検知できる記録） ----------
+  // 友だちに送る試合・削除・奢り・相殺は、相手ごとの「追記だけの帳簿」の1行として署名して送る。
+  // 1行目は署名用の公開鍵。各行に通し番号と前の行のハッシュが入るので、あとから途中を書き換えると相手の写しと食い違う
+
+  const LEDGER_MAX_BYTES = 2550; // 署名を足して暗号化しても ntfy.sh に収まる大きさ
+  let appendQueue = Promise.resolve();
+  let applyNote = ''; // applyMessage が反映した内容の説明（帳簿の履歴に残す）
+
+  function ledgerSend(fid, msg, note, legacy) {
+    appendQueue = appendQueue.then(() => appendEntry(fid, msg, note, legacy)).catch(() => {});
+    return appendQueue;
+  }
+
+  async function appendEntry(fid, msg, note, legacy) {
+    await keysReady;
+    if (!friendById(fid)) return;
+    if (!signKey || !db.settings.spub) {
+      // 署名が使えない環境では、帳簿なしで従来どおり送る
+      if (legacy) enqueue(fid, legacy.key, legacy.ref, msg);
+      saveDb();
+      return;
+    }
+    const rows = db.ledger.mine[fid] || (db.ledger.mine[fid] = []);
+    if (!rows.length && msg.t !== 'key') await appendEntry(fid, { t: 'key', spub: db.settings.spub }, '帳簿を開始');
+    if (msg.t === 'key' && rows.length) return;
+    const s = rows.length + 1;
+    const key = `e:${s}`;
+    const entry = Object.assign({ v: L.VERSION, from: db.settings.myId, name: myName(), key }, msg,
+      { L: { s, p: s > 1 ? rows[s - 2].h : '', at: Date.now(), to: fid } });
+    if (entry.m && entry.m.rally && new TextEncoder().encode(JSON.stringify(entry)).length > LEDGER_MAX_BYTES) {
+      // 長すぎる試合は1点ごとの記録を省いて結果だけ送る
+      entry.m = Object.assign({}, entry.m);
+      delete entry.m.rally;
+      delete entry.m.firstServer;
+    }
+    await LG.sign(signKey, entry);
+    const text = JSON.stringify(entry);
+    rows.push({ s, h: await LG.entryHash(entry), at: entry.L.at, text, note: note || '', resent: 0 });
+    db.outbox.push({ to: fid, key, ref: `L:${s}`, inner: text, sentAt: 0 });
+    saveDb();
+  }
+
+  // ---------- ビットコインへの刻印（OpenTimestamps・設定でオン） ----------
+  // すべての帳簿の「最後の番号と先頭のハッシュ」をまとめた元データのハッシュ値だけを刻印サーバーに送る（中身は送らない）
+  const OTS_CALENDARS = ['https://a.pool.opentimestamps.org', 'https://b.pool.opentimestamps.org'];
+  let stamping = false;
+
+  function ledgerHeads() {
+    const me = db.settings.myId;
+    const out = [];
+    for (const [fid, rows] of Object.entries(db.ledger.mine)) if (rows.length) out.push({ from: me, to: fid, s: rows.length, h: rows[rows.length - 1].h });
+    for (const [fid, st] of Object.entries(db.ledger.peer)) if (st.rows.length) out.push({ from: fid, to: me, s: st.rows.length, h: st.rows[st.rows.length - 1].h });
+    return out.sort((a, b) => `${a.from}>${a.to}`.localeCompare(`${b.from}>${b.to}`));
+  }
+
+  // 帳簿が変わっていれば1日1回まで刻印する（つながらなければ1時間あけてやり直す）
+  async function stampLedger(force) {
+    if (!db.settings.ots || stamping) return;
+    const heads = ledgerHeads();
+    if (!heads.length) return;
+    const o = db.ledger.ots;
+    const sig = JSON.stringify(heads);
+    const now = Date.now();
+    if (!force && (o.lastSig === sig || now - o.lastAt < 24 * HOUR_MS || now - (o.lastTry || 0) < HOUR_MS)) return;
+    stamping = true;
+    try {
+      o.lastTry = now;
+      const doc = LG.rootDoc(db.settings.myId, heads, new Date(now).toISOString());
+      const digest = await LG.sha256(doc);
+      const proofs = [];
+      for (const cal of OTS_CALENDARS) {
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 15000);
+        try {
+          const res = await fetch(`${cal}/digest`, {
+            method: 'POST',
+            headers: { Accept: 'application/vnd.opentimestamps.v1', 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: digest,
+            signal: ctl.signal,
+          });
+          if (res.ok) {
+            const reply = new Uint8Array(await res.arrayBuffer());
+            if (reply.length && reply.length <= 10000) proofs.push({ cal, b64: LG.toB64u(LG.otsFile(digest, reply)) });
+          }
+        } catch (e) {
+          /* 次の刻印サーバーを試す */
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      o.failed = !proofs.length;
+      if (proofs.length) {
+        o.stamps = o.stamps.concat({ at: now, doc, proofs }).slice(-30);
+        o.lastAt = now;
+        o.lastSig = sig;
+      }
+      saveDb();
+    } finally {
+      stamping = false;
+    }
+  }
+
+  function otsCard() {
+    const on = !!db.settings.ots;
+    const o = db.ledger.ots;
+    const last = o.stamps[o.stamps.length - 1];
+    const seg = [[0, 'オフ'], [1, 'オン']].map(([v, l]) => {
+      const sel = (on ? 1 : 0) === v;
+      return `<button type="button" role="radio" aria-checked="${sel}" class="${sel ? 'on' : ''}" data-action="ots-setting" data-value="${v}">${l}</button>`;
+    }).join('');
+    let status = '';
+    if (on && last) {
+      status = `<p class="small">最新の刻印：${fmtTime(last.at)}（${last.proofs.length}か所の刻印サーバーに依頼済み。数時間後にビットコインのブロックに入ります）</p>
+        <div class="row-actions">
+          <button type="button" class="btn" data-action="ots-download" data-kind="ots">証明ファイル（.ots）</button>
+          <button type="button" class="btn" data-action="ots-download" data-kind="json">元データ（.json）</button>
+        </div>
+        <p class="hint small muted">2つのファイルを opentimestamps.org の Verify に入れると、ビットコインに刻まれた日時を確認できます。</p>`;
+    } else if (on) {
+      status = `<p class="small muted">${o.failed ? '刻印サーバーに接続できませんでした。1時間ほどあけて自動でやり直します。'
+        : ledgerHeads().length ? '次の同期で刻印します。' : '友だちとの帳簿ができたら刻印します。'}</p>`;
+    }
+    return `<div class="card form">
+      <h3>⛓ ビットコインへの刻印</h3>
+      <p class="muted small">友だちとの帳簿の最新の状態を、1日1回まで OpenTimestamps でビットコインに刻みます。無料で、送るのはハッシュ値だけです（記録の中身は送りません）。刻んだあとは「その日時に帳簿がその状態だった」ことを、誰もあとから覆せなくなります。</p>
+      <div class="field"><div class="seg" role="radiogroup">${seg}</div></div>
+      ${status}
+    </div>`;
+  }
+
+  // 相手の成績ページに出す帳簿のようす（照合の結果・食い違い・最近の記録）
+  function ledgerCard(name) {
+    const f = friendByName(name);
+    if (!f) return '';
+    const mine = db.ledger.mine[f.id] || [];
+    const st = db.ledger.peer[f.id];
+    const peer = st ? st.rows : [];
+    const issues = st ? st.issues : [];
+    if (!mine.length && !peer.length && !issues.length) return '';
+    const open = issues.filter((i) => !i.seen);
+    const ack = db.ledger.acked[f.id];
+    const waiting = st ? Object.keys(st.pending).length : 0;
+    const who = esc(f.name);
+    const mineState = !mine.length ? '' : !ack ? `あなたの記録 ${mine.length}行（${who}さんの照合待ち）`
+      : ack.ok ? `あなたの記録 ${mine.length}行（${ack.s}行目まで${who}さんの写しと一致・${fmtTime(ack.at)}）`
+        : `あなたの記録 ${mine.length}行（⚠ ${who}さんの写しと食い違い）`;
+    const peerState = peer.length ? `${who}さんの記録 ${peer.length}行（署名を確認済み${waiting ? `・${waiting}行は前の行の到着待ち` : ''}）` : '';
+    const items = mine.map((r) => ({ at: r.at, who: 'あなた', note: r.note }))
+      .concat(peer.map((r) => ({ at: r.at, who: `${f.name}さん`, note: r.note })))
+      .filter((x) => x.note).sort((a, b) => b.at - a.at).slice(0, 15);
+    return `<section class="card ledger-card">
+      <h3>📒 帳簿 <span class="muted small">改ざんを検知できる記録</span></h3>
+      ${open.length ? `<div class="ledger-warn">${open.map((i) => `<p>⚠ ${esc(i.text)} <span class="muted small">${fmtTime(i.at)}</span></p>`).join('')}
+        <button type="button" class="btn small-btn" data-action="ledger-seen" data-id="${esc(f.id)}">確認した</button></div>` : ''}
+      <p class="small ledger-state">${[mineState, peerState].filter(Boolean).map((x) => `<span>${x}</span>`).join('')}</p>
+      ${items.length ? `<ul class="ledger-list">${items.map((x) => `<li><span class="ll-when">${fmtTime(x.at)}</span><span class="ll-who">${esc(x.who)}</span><span class="ll-what">${esc(x.note)}</span></li>`).join('')}</ul>` : ''}
+    </section>`;
+  }
+
+  // 戦績ページの上に、帳簿の食い違いを知らせる帯
+  function ledgerBanner() {
+    return Object.entries(db.ledger.peer).map(([fid, st]) => {
+      const n = st.issues.filter((i) => !i.seen).length;
+      const f = friendById(fid);
+      return n && f ? `<button type="button" class="ledger-banner" data-action="opponent" data-name="${esc(f.name)}">⚠ ${esc(f.name)}さんとの帳簿に確認が必要なことがあります（${n}件）<span class="go">確認 ›</span></button>` : '';
+    }).join('');
+  }
+
+  // 連携中で鍵のある友だちには、帳簿の1行目（署名用の公開鍵）を用意しておく
+  function ensureLedgers() {
+    keysReady.then(() => {
+      if (!signKey) return;
+      for (const f of db.friends) if (f.pub && !(db.ledger.mine[f.id] || []).length) ledgerSend(f.id, { t: 'key', spub: db.settings.spub }, '帳簿を開始');
+    });
+  }
+
+  function peerOf(fid) {
+    return db.ledger.peer[fid] || (db.ledger.peer[fid] = { rows: [], pending: {}, spub: '', issues: [], old: [] });
+  }
+
+  // 食い違いなどを記録して知らせる（同じものは1回だけ）
+  function addIssue(fid, kind, s, text, evidence) {
+    const st = peerOf(fid);
+    if (st.issues.some((i) => i.kind === kind && i.s === s && !i.seen)) return;
+    st.issues.push({ kind, s, at: Date.now(), text, seen: false, evidence: (evidence || []).slice(0, 2) });
+    st.issues = st.issues.slice(-50);
+    toast(`⚠ ${text}`);
+  }
+
+  function treatLabel(n) {
+    return TR.isNeed(n) ? `${n}勝で1奢り` : 'なし';
+  }
+
+  // 試合の記録・変更の説明（いつも自分から見た結果で書く）
+  function matchNote(before, m, how) {
+    const d = fmtDate(m.date) || '日付なし';
+    const r = `${m.mySets}-${m.oppSets}`;
+    if (how === 'restore') return `${d}の試合（${r}）を元に戻す`;
+    if (how === 'del') return `${d}の試合（${r}）を取り消し`;
+    if (!before) return `${d}の試合 ${r} を記録`;
+    const parts = [];
+    if (before.mySets !== m.mySets || before.oppSets !== m.oppSets) parts.push(`結果 ${before.mySets}-${before.oppSets} → ${r}`);
+    if (before.date !== m.date) parts.push(`日付 ${fmtDate(before.date)} → ${d}`);
+    if ((before.treat || 0) !== (m.treat || 0)) parts.push(`奢り ${treatLabel(before.treat)} → ${treatLabel(m.treat)}`);
+    return parts.length ? `${fmtDate(before.date) || d}の試合を変更（${parts.join('・')}）` : `${d}の試合 ${r} を更新`;
+  }
+
+  function matchSnapshot(m) {
+    return { date: m.date, mySets: m.mySets, oppSets: m.oppSets, treat: m.treat };
+  }
+
+  function queueMatch(m, before, how) {
     if (m.received || !m.opponentId || !friendById(m.opponentId)) return;
     const p = L.matchPayload(m);
-    enqueue(m.opponentId, L.outboxKey('m', m.id, p.rev), m.id, { t: 'match', m: p });
+    ledgerSend(m.opponentId, { t: 'match', m: p }, matchNote(before, m, how), { key: L.outboxKey('m', m.id, p.rev), ref: m.id });
   }
 
   // 奢りの相殺の提案・返事を送る。処理済みの提案は覚えておき、再送されても二重に扱わない
   function sendOffer(o, st) {
     if (st !== 'ask') db.sync.offersDone = db.sync.offersDone.concat(o.id).slice(-200);
     if (!friendById(o.friendId)) return;
-    enqueue(o.friendId, L.outboxKey('o', o.id, st), `offset:${o.id}`, { t: 'offset', id: o.id, st, amount: st === 'ask' ? o.amount : undefined });
+    const note = st === 'ask' ? `${TR.format(o.amount)}奢りずつの相殺を提案` : st === 'ok' ? `${TR.format(o.amount)}奢りずつの相殺に合意`
+      : o.dir === 'in' ? '相殺の提案を断った' : '相殺の提案を取り下げた';
+    ledgerSend(o.friendId, { t: 'offset', id: o.id, st, amount: st === 'ask' ? o.amount : undefined }, note,
+      { key: L.outboxKey('o', o.id, st), ref: `offset:${o.id}` });
   }
 
-  function queueDelete(to, matchId) {
+  function queueDelete(to, m) {
     if (!to || !friendById(to)) return;
     const at = Date.now();
-    enqueue(to, L.outboxKey('d', matchId, at), matchId, { t: 'del', id: matchId, at });
+    ledgerSend(to, { t: 'del', id: m.id, at }, matchNote(null, m, 'del'), { key: L.outboxKey('d', m.id, at), ref: m.id });
+  }
+
+  // 奢った・奢ってもらったの記録を友だちとの帳簿にも書く
+  function queueTreat(f, e) {
+    ledgerSend(f.id, { t: 'treat', id: e.id, kind: e.kind, amount: e.amount }, e.kind === 'paid' ? '1奢りした' : '1奢ってもらった',
+      { key: `t:${e.id}`, ref: `treat:${e.id}` });
+  }
+
+  function queueTreatDel(f, e) {
+    ledgerSend(f.id, { t: 'treat-del', id: e.id }, '奢りの記録を取り消し', { key: `td:${e.id}`, ref: `treat:${e.id}` });
+  }
+
+  // 届いた帳簿の行を確かめて、順番どおりに反映する
+  async function receiveEntry(friend, msg, text) {
+    const raw = msg.raw;
+    const fid = friend.id;
+    const st = peerOf(fid);
+    if (!LG.isLink(raw.L) || raw.L.to !== db.settings.myId) {
+      addIssue(fid, 'bad', 0, `${friend.name}さんから形式の正しくない記録が届きました（反映していません）`);
+      return;
+    }
+    const s = raw.L.s;
+    const h = await LG.entryHash(raw);
+    // 帳簿の1行目がもう一度届いた：相手が帳簿をはじめから作り直した（友だちの登録し直しなど）
+    if (s === 1 && st.rows.length && st.rows[0].h !== h && msg.t === 'key' && await LG.verify(msg.spub, raw)) {
+      addIssue(fid, 'restart', 1, `${friend.name}さんが帳簿をはじめから作り直しました（以前の${st.rows.length}行はこの端末に残してあります）`);
+      st.old = st.old.concat([st.rows]).slice(-3);
+      st.rows = [];
+      st.pending = {};
+      st.spub = '';
+    }
+    const where = LG.place(st.rows.length, (n) => st.rows[n - 1] && st.rows[n - 1].h, raw, h);
+    if (where === 'dup') return;
+    if (where === 'later') {
+      // 間の行がまだ届いていない。届くまで預かる
+      if (Object.keys(st.pending).length < 100) st.pending[s] = text;
+      return;
+    }
+    const spub = s === 1 && msg.t === 'key' ? msg.spub : st.spub;
+    if (!(await LG.verify(spub, raw))) {
+      addIssue(fid, 'bad-sig', s, `${friend.name}さんの帳簿の${s}行目の署名が正しくありません（反映していません）`, [text]);
+      return;
+    }
+    if (where === 'conflict') {
+      addIssue(fid, 'conflict', s, `${friend.name}さんの帳簿の${s}行目が、前に届いた内容と違います。あとから書き換えられた可能性があります`, [st.rows[s - 1].text, text]);
+      return;
+    }
+    if (where === 'broken') {
+      addIssue(fid, 'broken', s, `${friend.name}さんの帳簿の${s}行目が前の行とつながっていません。途中が書き換えられた可能性があります`, [text]);
+      return;
+    }
+    if (s === 1) {
+      if (msg.t !== 'key') return;
+      st.spub = msg.spub;
+    }
+    applyNote = '';
+    if (msg.t === 'key') applyNote = '帳簿を開始';
+    else applyMessage(msg, Date.now());
+    st.rows.push({ s, h, at: raw.L.at, text, note: applyNote, resent: 0 });
+    // 預かっていた続きの行を順に反映する
+    const next = st.pending[s + 1];
+    if (next) {
+      delete st.pending[s + 1];
+      const m2 = L.decode(next);
+      if (m2 && m2.raw && m2.from === fid) await receiveEntry(friend, m2, next);
+    }
+  }
+
+  // 相手の返事に入っている「こちらの帳簿の写しの最後」を、自分の帳簿と照らし合わせる
+  function checkAckHead(fid, lh) {
+    const rows = db.ledger.mine[fid] || [];
+    const f = friendById(fid);
+    const name = f ? f.name : '相手';
+    if (lh.s > rows.length) {
+      addIssue(fid, 'mine-short', lh.s, `${name}さんの端末にあるあなたの記録（${lh.s}行）が、この端末の帳簿（${rows.length}行）より多くなっています。この端末のデータが消えたか、巻き戻された可能性があります`);
+      db.ledger.acked[fid] = { s: lh.s, at: Date.now(), ok: false };
+      return;
+    }
+    const ok = lh.s === 0 || rows[lh.s - 1].h === lh.h;
+    if (!ok) addIssue(fid, 'mismatch', lh.s, `${name}さんの端末にあるあなたの記録の${lh.s}行目が、この端末の帳簿と違います。どちらかの記録が書き換えられた可能性があります`);
+    db.ledger.acked[fid] = { s: lh.s, at: Date.now(), ok };
+    // 相手の写しが途中で止まっている（届いたあとに失われた）なら、続きを送り直す（1行につき3回まで）
+    for (let i = lh.s; i < rows.length && i < lh.s + 20; i++) {
+      if (db.outbox.some((o) => o.to === fid && o.ref === `L:${rows[i].s}`)) break;
+      if (rows[i].resent >= 3) break;
+      rows[i].resent++;
+      db.outbox.push({ to: fid, key: `e:${rows[i].s}`, ref: `L:${rows[i].s}`, inner: rows[i].text, sentAt: 0 });
+    }
   }
 
   async function post(to, body, delayH) {
@@ -454,6 +823,7 @@
   // 受け取ったメッセージ（復号・検証済み）を反映し、返事(ack)すべきキーを返す
   function applyMessage(msg, now) {
     const friend = friendById(msg.from);
+    applyNote = '';
     if (!friend || msg.t === 'hello') return null;
     if (msg.t === 'name') {
       updateFriendName(friend, msg.name, msg.at);
@@ -461,20 +831,29 @@
     }
     if (msg.t === 'ack') {
       db.outbox = db.outbox.filter((o) => !(o.to === msg.from && msg.keys.includes(o.key)));
+      if (msg.lh) checkAckHead(msg.from, msg.lh);
       return null;
     }
     if (msg.t === 'del') {
       const rid = L.receivedId(msg.from, msg.id);
+      const gone = db.matches.find((x) => x.id === rid);
       db.matches = db.matches.filter((x) => x.id !== rid);
       for (const x of db.matches) {
         if (x.remote && x.remote.from === msg.from && x.remote.id === msg.id) delete x.remote;
       }
       // 古い試合データを後から送り直されても復活させない
       db.sync.tomb[`${msg.from}:${msg.id}`] = Math.max(db.sync.tomb[`${msg.from}:${msg.id}`] || 0, msg.at || now);
+      if (gone) {
+        applyNote = matchNote(null, gone, 'del');
+        toast(`${friend.name}さん：${applyNote}`);
+      } else {
+        applyNote = '試合を取り消し';
+      }
       return msg.key;
     }
     if (msg.t === 'offset') {
       const o = db.offers.find((x) => x.id === msg.id && x.friendId === msg.from);
+      applyNote = msg.st === 'ask' ? `${TR.format(msg.amount)}奢りずつの相殺を提案` : msg.st === 'ok' ? '相殺に合意' : '相殺を見送り';
       if (msg.st === 'ask') {
         if (!o && !db.sync.offersDone.includes(msg.id)) {
           db.offers.push({ id: msg.id, dir: 'in', friendId: msg.from, name: friend.name, amount: msg.amount, at: now });
@@ -487,32 +866,72 @@
         db.offers = db.offers.filter((x) => x !== o);
         db.sync.offersDone = db.sync.offersDone.concat(o.id).slice(-200);
         if (o.dir === 'out' && msg.st === 'ok') {
+          applyNote = `${TR.format(o.amount)}奢りずつの相殺に合意`;
           db.treatLog.push({ id: uid(), name: o.name, kind: 'offset', amount: o.amount, at: now });
           toast(`${friend.name}さんが合意したので、${TR.format(o.amount)}奢りずつ相殺しました`);
         } else if (o.dir === 'out') {
           toast(`${friend.name}さんは相殺を見送りました`);
+        } else {
+          applyNote = '相殺の提案を取り下げ';
         }
       }
       return msg.key;
     }
+    if (msg.t === 'treat') {
+      // 相手が「奢った」= 自分は「奢ってもらった」
+      const kind = msg.kind === 'paid' ? 'got' : 'paid';
+      const at = msg.raw && msg.raw.L ? msg.raw.L.at : now;
+      applyNote = msg.kind === 'paid' ? '1奢りした' : '1奢ってもらった';
+      const rid = `r_${msg.from}_${msg.id}`;
+      if (db.treatLog.some((e) => e.id === rid || (e.paired && e.paired.from === msg.from && e.paired.id === msg.id))) return msg.key;
+      // 同じ1回を2人とも記録していたら（同期の前に両方が押した）、2回分にしない
+      const twin = db.treatLog.find((e) => e.shared === msg.from && !e.paired && e.kind === kind && e.amount === msg.amount && Math.abs(e.at - at) < 48 * HOUR_MS);
+      if (twin) twin.paired = { id: msg.id, from: msg.from, kind, amount: msg.amount, at };
+      else db.treatLog.push({ id: rid, name: friend.name, kind, amount: msg.amount, at, from: msg.from, rid: msg.id });
+      toast(`${friend.name}さん：「${applyNote}」${twin ? '（あなたの記録と同じ1回として数えます）' : ''}`);
+      return msg.key;
+    }
+    if (msg.t === 'treat-del') {
+      const rid = `r_${msg.from}_${msg.id}`;
+      const had = db.treatLog.some((e) => e.id === rid);
+      db.treatLog = db.treatLog.filter((e) => e.id !== rid);
+      for (const e of db.treatLog) if (e.paired && e.paired.from === msg.from && e.paired.id === msg.id) delete e.paired;
+      applyNote = '奢りの記録を取り消し';
+      if (had) toast(`${friend.name}さん：${applyNote}`);
+      return msg.key;
+    }
     if (msg.t === 'match') {
-      if (isTombstoned(msg.from, msg.m.id, msg.m.rev)) return msg.key;
       const local = L.toLocalMatch(msg.m, msg.from, friend.name, now);
+      if (isTombstoned(msg.from, msg.m.id, msg.m.rev)) {
+        applyNote = `${matchNote(null, local)}（削除済みのため反映せず）`;
+        return msg.key;
+      }
       const existing = db.matches.find((x) => x.id === local.id);
       if (existing) {
         if ((existing.received.rev || 0) <= msg.m.rev) {
-          // 自分で書いたメモと日時は残して、結果だけ相手の最新に合わせる
+          // 自分で書いたメモと日時は残して、結果だけ相手の最新に合わせる。変わった内容は履歴に残して知らせる
+          const before = matchSnapshot(existing);
           Object.assign(existing, local, { memo: existing.memo, createdAt: existing.createdAt });
+          if (!local.treat) delete existing.treat;
+          applyNote = matchNote(before, existing);
+          if (applyNote.includes('を変更')) toast(`${friend.name}さん：${applyNote}`);
+        } else {
+          applyNote = `${matchNote(null, local)}（古い内容のため反映せず）`;
         }
         return msg.key;
       }
       const linked = db.matches.find((x) => x.remote && x.remote.from === msg.from && x.remote.id === msg.m.id);
-      if (linked) return msg.key;
+      if (linked) {
+        applyNote = `${matchNote(null, local)}（自分の記録とまとめ済み）`;
+        return msg.key;
+      }
       const dup = L.findDuplicate(db.matches, local);
       if (dup) {
         dup.remote = { from: msg.from, id: msg.m.id, rev: msg.m.rev };
+        applyNote = `${matchNote(null, local)}（自分の記録とまとめました）`;
       } else {
         db.matches.push(local);
+        applyNote = matchNote(null, local);
         toast(`${friend.name}さんから試合結果が届きました`);
       }
       return msg.key;
@@ -576,8 +995,11 @@
     for (const [to, keys] of acks) {
       const f = friendById(to);
       if (!f || !f.pub || !keys.length) continue;
+      // 受け取った相手の帳簿の写しの最後も伝えて、相手の手元の帳簿と照らし合わせてもらう
+      const rows = db.ledger.peer[to] ? db.ledger.peer[to].rows : [];
+      const lh = rows.length ? { s: rows.length, h: rows[rows.length - 1].h } : undefined;
       try {
-        await post(to, await sealFor(f, L.encode({ t: 'ack', from: db.settings.myId, name: myName(), keys })));
+        await post(to, await sealFor(f, L.encode({ t: 'ack', from: db.settings.myId, name: myName(), keys, lh })));
       } catch (e) {
         /* 返事が届かなくても相手が再送してくるので、そのときにまた返す */
       }
@@ -624,14 +1046,27 @@
         const f = friendById(env.from);
         if (f && !f.pub) inner = env.text;
       }
-      const msg = inner && L.decode(inner);
-      if (!msg || msg.from !== env.from) continue;
-      changed = true;
-      addAck(acks, msg.from, applyMessage(msg, Date.now()));
+      if (!inner) continue;
+      if (await receiveInner(inner, env.from, acks)) changed = true;
     }
     db.sync.seen = db.sync.seen.slice(-300);
     await sendAcks(acks);
     return changed;
+  }
+
+  // 復号できた中身を反映する。帳簿の行は確かめてから順番どおりに反映する
+  async function receiveInner(text, from, acks) {
+    const msg = L.decode(text);
+    if (!msg || msg.from !== from) return false;
+    const friend = friendById(from);
+    if (msg.raw && friend && msg.t !== 'ack') {
+      // 受け取った行は（先の番号で預かる場合も）この端末に保存するので、すぐ返事する
+      addAck(acks, from, msg.key);
+      await receiveEntry(friend, msg, text);
+      return true;
+    }
+    addAck(acks, from, applyMessage(msg, Date.now()));
+    return true;
   }
 
   // 申請を承認して友だちに追加する（預かっていた結果もここで反映する）
@@ -644,12 +1079,10 @@
     queueHello(f.id);
     const acks = new Map();
     addAck(acks, f.id, `h:${f.id}`);
-    for (const text of req.buffer || []) {
-      const msg = L.decode(text);
-      if (msg && msg.from === f.id) addAck(acks, f.id, applyMessage(msg, Date.now()));
-    }
-    saveDb();
     await keysReady;
+    for (const text of req.buffer || []) await receiveInner(text, f.id, acks);
+    saveDb();
+    ensureLedgers();
     await sendAcks(acks);
     return f;
   }
@@ -675,9 +1108,12 @@
     try {
       await keysReady;
       if (!myPub() || !privKey) throw new Error('no keys');
+      ensureLedgers();
       changed = await pollInbox();
       lastSyncOk = true;
+      await appendQueue; // 帳簿への書き込み（署名）が終わってから送る
       await flushOutbox();
+      await stampLedger();
     } catch (e) {
       lastSyncOk = false;
     } finally {
@@ -693,7 +1129,9 @@
   let toastTimer = null;
   // undo に関数を渡すと「元に戻す」ボタン付きで少し長めに表示する
   let toastUndo = null;
+  let toastCount = 0;
   function toast(msg, undo) {
+    toastCount++;
     const el = document.getElementById('toast');
     el.textContent = '';
     const text = document.createElement('span');
@@ -984,7 +1422,7 @@
   // 戦績：成績のまとめと試合の一覧を1ページに出す（期間の絞り込みはページ全体にかかる）
   function viewList() {
     const all = sortedMatches();
-    let html = liveBanner() + '<h2 class="view-title">戦績</h2>';
+    let html = liveBanner() + ledgerBanner() + '<h2 class="view-title">戦績</h2>';
     if (!all.length) {
       return html + `<div class="empty">
         <p>まだ記録がありません。</p>
@@ -1388,6 +1826,7 @@
       </section>`;
     html += rallyCard(ms);
     html += treatCard(name);
+    html += ledgerCard(name);
     html += `<h3 class="list-title">対戦履歴</h3><ul class="match-list">${ms.map(matchItem).join('')}</ul>`;
     return html;
   }
@@ -1516,6 +1955,7 @@
           <p class="hint small muted">「自動」は端末のダークモード設定に合わせます。</p>
         </div>
       </div>
+      ${otsCard()}
       <div class="card">
         <h3>データ</h3>
         <p class="muted small">記録はこの端末のブラウザ内に保存されます。機種変更やバックアップにはエクスポートを使ってください。</p>
@@ -1612,6 +2052,7 @@
       const m = db.matches.find((x) => x.id === d.id);
       if (!m) return go('list');
       const prevOpponentId = m.opponentId;
+      const before = matchSnapshot(m);
       Object.assign(m, { date: d.date, opponent: d.opponent, event: d.event, memo: d.memo, updatedAt: Date.now() });
       if (m.mode !== 'detail') Object.assign(m, { bestOf: d.bestOf, mySets: d.result[0], oppSets: d.result[1] });
       const treat = draftTreat(d);
@@ -1621,8 +2062,8 @@
         // 相手を変えたら、前の友だちに送った結果は取り消す
         const f = friendByName(m.opponent);
         m.opponentId = f ? f.id : undefined;
-        if (prevOpponentId && prevOpponentId !== m.opponentId) queueDelete(prevOpponentId, m.id);
-        queueMatch(m);
+        if (prevOpponentId && prevOpponentId !== m.opponentId) queueDelete(prevOpponentId, m);
+        queueMatch(m, prevOpponentId === m.opponentId ? before : null);
       }
       saveDb();
       sync();
@@ -1743,9 +2184,13 @@
     // 鍵やIDは入れない（ファイルが他人に渡ってもなりすましに使えないように）
     const settings = { myName: db.settings.myName, theme: db.settings.theme };
     const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), settings, matches: db.matches, friends: db.friends, treatLog: db.treatLog }, null, 2)], { type: 'application/json' });
+    downloadBlob(blob, `tt-record-${today()}.json`);
+  }
+
+  function downloadBlob(blob, name) {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `tt-record-${today()}.json`;
+    a.download = name;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1829,11 +2274,26 @@
       case 'treat-log': {
         // 奢った / 奢ってもらった（押した直後のポップアップから元に戻せる）
         const entry = { id: uid(), name: t.dataset.name, kind: t.dataset.kind === 'got' ? 'got' : 'paid', amount: TR.UNIT, at: Date.now() };
+        const tf = friendForTreat(entry.name);
+        if (tf) {
+          entry.shared = tf.id;
+          queueTreat(tf, entry);
+        }
         db.treatLog.push(entry);
         saveDb();
         render();
+        if (tf) sync();
         toast(entry.kind === 'got' ? '1奢りしてもらったと記録しました' : '1奢りしたと記録しました', () => {
           db.treatLog = db.treatLog.filter((e) => e !== entry);
+          if (tf) {
+            queueTreatDel(tf, entry);
+            // 相手も同じ1回を記録していた場合は、相手側の記録を残す
+            if (entry.paired) {
+              const p = entry.paired;
+              db.treatLog.push({ id: `r_${p.from}_${p.id}`, name: entry.name, kind: p.kind, amount: p.amount, at: p.at, from: p.from, rid: p.id });
+            }
+            sync();
+          }
           saveDb();
           render();
           toast('元に戻しました');
@@ -1957,7 +2417,7 @@
         if (!gone) break;
         db.matches = db.matches.filter((m) => m.id !== gone.id);
         // 自分の記録を消したら相手に届けた分も取り消す（相手から届いた記録はこの端末からだけ消す）
-        if (!gone.received && gone.opponentId) queueDelete(gone.opponentId, gone.id);
+        if (!gone.received && gone.opponentId) queueDelete(gone.opponentId, gone);
         // 相手から届いた（またはまとめた）記録は、あとから同じ内容が届いても戻さない。相手が編集すれば届く
         const src = gone.received || gone.remote;
         const tombKey = src ? `${src.from}:${src.id}` : '';
@@ -1971,7 +2431,7 @@
           if (!gone.received && gone.opponentId) {
             // 相手側の削除済みの印より新しくして、もう一度届ける
             gone.updatedAt = Date.now();
-            queueMatch(gone);
+            queueMatch(gone, null, 'restore');
           }
           if (tombKey) {
             if (prevTomb === undefined) delete db.sync.tomb[tombKey];
@@ -1983,6 +2443,28 @@
           go('match', { id: gone.id });
           toast('元に戻しました');
         });
+        break;
+      }
+      case 'ledger-seen': {
+        const st = db.ledger.peer[t.dataset.id];
+        if (st) for (const i of st.issues) i.seen = true;
+        saveDb();
+        render();
+        break;
+      }
+      case 'ots-setting':
+        db.settings.ots = t.dataset.value === '1';
+        saveDb();
+        render();
+        if (db.settings.ots) stampLedger(true).then(() => { if (view === 'settings') render(); });
+        break;
+      case 'ots-download': {
+        const last = db.ledger.ots.stamps[db.ledger.ots.stamps.length - 1];
+        if (!last) break;
+        const d = new Date(last.at);
+        const base = `tt-record-ledger-${isoOf(last.at)}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}.json`;
+        if (t.dataset.kind === 'json') downloadBlob(new Blob([last.doc], { type: 'application/json' }), base);
+        else downloadBlob(new Blob([LG.fromB64u(last.proofs[0].b64)], { type: 'application/octet-stream' }), `${base}.ots`);
         break;
       }
       case 'opp-more':
@@ -2068,13 +2550,19 @@
         const f = friendById(t.dataset.id);
         if (!f) break;
         const waiting = db.outbox.filter((o) => o.to === f.id);
+        const ledger = { mine: db.ledger.mine[f.id], peer: db.ledger.peer[f.id], acked: db.ledger.acked[f.id] };
         db.friends = db.friends.filter((x) => x.id !== f.id);
         db.outbox = db.outbox.filter((o) => o.to !== f.id);
+        // 登録し直したときは帳簿もはじめからにする
+        delete db.ledger.mine[f.id];
+        delete db.ledger.peer[f.id];
+        delete db.ledger.acked[f.id];
         saveDb();
         render();
         toast(`${f.name}さんとの連携を解除しました（記録は残ります）`, () => {
           if (!friendById(f.id)) db.friends.push(f);
           db.outbox.push(...waiting);
+          for (const k of ['mine', 'peer', 'acked']) if (ledger[k]) db.ledger[k][f.id] = ledger[k];
           saveDb();
           render();
           toast('元に戻しました');
@@ -2094,9 +2582,15 @@
           navigator.clipboard.writeText(myLink()).then(() => toast('リンクをコピーしました'), () => {});
         }
         break;
-      case 'sync-now':
-        sync({ render: true }).then(() => toast(lastSyncOk === false ? '通信できませんでした' : '同期しました'));
+      case 'sync-now': {
+        // 同期中に届いた知らせ（変更・削除など）は「同期しました」で上書きしない
+        const shown = toastCount;
+        sync({ render: true }).then(() => {
+          if (lastSyncOk === false) toast('通信できませんでした');
+          else if (toastCount === shown) toast('同期しました');
+        });
         break;
+      }
       case 'wipe':
         if (confirm('すべての記録を削除します。元に戻せません。よろしいですか？')) {
           db.matches = [];
@@ -2205,6 +2699,7 @@
   applyTheme();
   prepareKeys();
   migrateLegacyFriends();
+  ensureLedgers();
   if (!handleHash()) go(live ? 'live' : 'list');
   // 初回は鍵の作成が終わってからQRコードを描き直す
   keysReady.then(() => { if (view === 'friends') render(); });

@@ -162,3 +162,19 @@ test('decode: 奢りの相殺の提案・合意・お断り', () => {
   assert.equal(L.decode(L.encode({ t: 'offset', from: A, id: '<x>', st: 'ok' })), null);
   assert.equal(L.decode(L.encode({ t: 'offset', from: A, id: 'abc', st: 'evil' })), null);
 });
+
+test('decode: 帳簿の行・奢りの記録・照合つきの返事', () => {
+  const raw = { t: 'match', from: A, key: 'e:2', m: { id: 'm1', date: '2026-10-08', bestOf: 5, mode: 'simple', mySets: 3, oppSets: 1, rev: 1 }, L: { s: 2, p: 'x', at: 1, to: B, g: 'y' } };
+  const d = L.decode(L.encode(raw));
+  assert.equal(d.t, 'match');
+  assert.equal(d.raw.L.s, 2);
+  assert.equal(L.decode(L.encode({ t: 'match', from: A, m: raw.m })).raw, undefined);
+  const spub = 'B' + 'A'.repeat(86);
+  assert.equal(L.decode(L.encode({ t: 'key', from: A, spub })).spub, spub);
+  assert.equal(L.decode(L.encode({ t: 'key', from: A, spub: 'short' })), null);
+  assert.deepEqual(['kind', 'amount'].map((k) => L.decode(L.encode({ t: 'treat', from: A, id: 't1', kind: 'paid', amount: 6 }))[k]), ['paid', 6]);
+  assert.equal(L.decode(L.encode({ t: 'treat', from: A, id: 't1', kind: 'steal', amount: 6 })), null);
+  assert.equal(L.decode(L.encode({ t: 'treat-del', from: A, id: 't1' })).id, 't1');
+  const ack = L.decode(L.encode({ t: 'ack', from: A, keys: ['e:1'], lh: { s: 3, h: 'h'.repeat(43) } }));
+  assert.deepEqual(ack.lh, { s: 3, h: 'h'.repeat(43) });
+});

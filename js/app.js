@@ -22,8 +22,13 @@
   const TR = window.TTTreat;
   const L = window.TTLink;
   const NTFY = 'https://ntfy.sh';
-  // ntfy.sh は約12時間しか預からないので、届いた返事(ack)が来るまで間隔をあけて再送する
-  const RESEND_MS = 6 * 60 * 60 * 1000;
+  // ntfy.sh は届いたメッセージを12時間しか預からない。相手が数日アプリを開かなくても届くよう、
+  // 同じ内容を「11時間後・22時間後…66時間後に配達」の予約でも預けておく（ntfy.sh の予約は3日まで。受け取った側は重複を無視する）。
+  // それでも返事(ack)が来なければ、預けた分が切れる少し前に送り直す
+  const HOUR_MS = 60 * 60 * 1000;
+  const KEEP_H = 12;
+  const DELAYS_H = [11, 22, 33, 44, 55, 66];
+  const RESEND_BEFORE_MS = 6 * HOUR_MS;
   const POLL_MS = 60 * 1000;
   const STORE_KEY = 'ttrecord.v1';
   const LIVE_KEY = 'ttrecord.live';
@@ -393,8 +398,8 @@
     enqueue(to, L.outboxKey('d', matchId, at), matchId, { t: 'del', id: matchId, at });
   }
 
-  async function post(to, body) {
-    const res = await fetch(`${NTFY}/${L.topicFor(to)}`, { method: 'POST', body });
+  async function post(to, body, delayH) {
+    const res = await fetch(`${NTFY}/${L.topicFor(to)}${delayH ? `?delay=${delayH}h` : ''}`, { method: 'POST', body });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   }
 
@@ -405,7 +410,7 @@
   async function flushOutbox() {
     const now = Date.now();
     for (const o of db.outbox) {
-      if (o.sentAt && now - o.sentAt < RESEND_MS) continue;
+      if (o.sentAt && now < (o.until || o.sentAt + KEEP_H * HOUR_MS) - RESEND_BEFORE_MS) continue;
       let body;
       if (o.hello) {
         body = L.helloEnvelope(db.settings.myId, myName(), myPub());
@@ -422,11 +427,22 @@
       }
       try {
         await post(o.to, body);
-        o.sentAt = Date.now();
       } catch (e) {
         lastSyncOk = false;
         return;
       }
+      // 配達予約が途中で断られても（回数制限など）、預けられた分までで次の再送時刻を決める
+      let kept = KEEP_H;
+      for (const h of DELAYS_H) {
+        try {
+          await post(o.to, body, h);
+          kept = h + KEEP_H;
+        } catch (e) {
+          break;
+        }
+      }
+      o.sentAt = Date.now();
+      o.until = o.sentAt + kept * HOUR_MS;
     }
   }
 
@@ -464,7 +480,10 @@
           db.offers.push({ id: msg.id, dir: 'in', friendId: msg.from, name: friend.name, amount: msg.amount, at: now });
           toast(`${friend.name}さんから奢りの相殺の提案が届きました`);
         }
-      } else if (o) {
+      } else if (!o) {
+        // 提案より先に返事が届いた場合も、あとから届く提案を表示しない
+        if (!db.sync.offersDone.includes(msg.id)) db.sync.offersDone = db.sync.offersDone.concat(msg.id).slice(-200);
+      } else {
         db.offers = db.offers.filter((x) => x !== o);
         db.sync.offersDone = db.sync.offersDone.concat(o.id).slice(-200);
         if (o.dir === 'out' && msg.st === 'ok') {
@@ -491,7 +510,7 @@
       if (linked) return msg.key;
       const dup = L.findDuplicate(db.matches, local);
       if (dup) {
-        dup.remote = { from: msg.from, id: msg.m.id };
+        dup.remote = { from: msg.from, id: msg.m.id, rev: msg.m.rev };
       } else {
         db.matches.push(local);
         toast(`${friend.name}さんから試合結果が届きました`);
@@ -1939,6 +1958,11 @@
         db.matches = db.matches.filter((m) => m.id !== gone.id);
         // 自分の記録を消したら相手に届けた分も取り消す（相手から届いた記録はこの端末からだけ消す）
         if (!gone.received && gone.opponentId) queueDelete(gone.opponentId, gone.id);
+        // 相手から届いた（またはまとめた）記録は、あとから同じ内容が届いても戻さない。相手が編集すれば届く
+        const src = gone.received || gone.remote;
+        const tombKey = src ? `${src.from}:${src.id}` : '';
+        const prevTomb = tombKey ? db.sync.tomb[tombKey] : undefined;
+        if (tombKey) db.sync.tomb[tombKey] = Math.max(prevTomb || 0, src.rev || Date.now());
         saveDb();
         sync();
         go('list');
@@ -1948,6 +1972,10 @@
             // 相手側の削除済みの印より新しくして、もう一度届ける
             gone.updatedAt = Date.now();
             queueMatch(gone);
+          }
+          if (tombKey) {
+            if (prevTomb === undefined) delete db.sync.tomb[tombKey];
+            else db.sync.tomb[tombKey] = prevTomb;
           }
           db.matches.push(gone);
           saveDb();

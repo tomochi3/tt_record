@@ -176,6 +176,11 @@
       case 'del':
         return typeof d.id === 'string' && d.id.length <= 40
           ? Object.assign(base, { id: d.id, at: Number.isFinite(d.at) ? d.at : 0 }) : null;
+      case 'offset':
+        // 奢りの相殺の提案(ask)・合意(ok)・取り下げ/お断り(no)。amount は 1奢り=6 の整数
+        if (typeof d.id !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(d.id) || !['ask', 'ok', 'no'].includes(d.st)) return null;
+        if (d.st === 'ask' && !(Number.isInteger(d.amount) && d.amount > 0 && d.amount <= 6000)) return null;
+        return Object.assign(base, { id: d.id, st: d.st, amount: d.st === 'ask' ? d.amount : 0 });
       case 'ack':
         return Array.isArray(d.keys)
           ? Object.assign(base, { keys: d.keys.filter((k) => typeof k === 'string' && k.length <= 80).slice(0, 200) })

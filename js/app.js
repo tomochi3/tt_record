@@ -32,8 +32,8 @@
 
   function loadDb() {
     const empty = {
-      settings: { myName: '自分' }, matches: [], friends: [], outbox: [], requests: [], blocked: [], treats: {},
-      sync: { since: 0, seen: [], tomb: {} },
+      settings: { myName: '自分' }, matches: [], friends: [], outbox: [], requests: [], blocked: [], treatLog: [], offers: [],
+      sync: { since: 0, seen: [], tomb: {}, offersDone: [] },
     };
     let d = null;
     try {
@@ -47,7 +47,11 @@
     const out = d && typeof d === 'object' ? {
       settings: Object.assign({}, empty.settings, d.settings && typeof d.settings === 'object' ? d.settings : {}),
       matches: arr(d.matches).map(L.sanitizeMatch).filter(Boolean),
-      treats: sanitizeTreats(d.treats),
+      treatLog: arr(d.treatLog).filter(TR.isLogEntry)
+        .map((e) => ({ id: typeof e.id === 'string' ? e.id.slice(0, 40) : uid(), name: cleanName(e.name), kind: e.kind, amount: e.amount, at: Number.isFinite(e.at) ? e.at : 0 })),
+      offers: arr(d.offers).filter((o) => o && L.isId(o.friendId) && ['in', 'out'].includes(o.dir) && typeof o.id === 'string' &&
+        /^[A-Za-z0-9_-]{1,40}$/.test(o.id) && Number.isInteger(o.amount) && o.amount > 0 && o.amount <= 6000)
+        .map((o) => ({ id: o.id, dir: o.dir, friendId: o.friendId, name: cleanName(o.name), amount: o.amount, at: Number.isFinite(o.at) ? o.at : 0 })),
       friends: arr(d.friends).map(sanitizeFriend).filter(Boolean),
       outbox: arr(d.outbox).filter((o) => o && L.isId(o.to) && typeof o.key === 'string'),
       requests: arr(d.requests).filter((r) => r && L.isId(r.id) && L.isPub(r.pub))
@@ -58,6 +62,16 @@
     out.settings.myName = cleanName(out.settings.myName) || '自分';
     if (!Array.isArray(out.sync.seen)) out.sync.seen = [];
     if (!out.sync.tomb || typeof out.sync.tomb !== 'object') out.sync.tomb = {};
+    out.sync.offersDone = arr(out.sync.offersDone).filter((x) => typeof x === 'string').slice(-200);
+    // 以前の「先にN勝で奢り・未/済」の済のメモを、奢った/奢ってもらった記録に移す
+    if (d && !Array.isArray(d.treatLog) && d.treats && typeof d.treats === 'object') {
+      for (const x of TR.legacyDecided(out.matches)) {
+        const done = d.treats[x.matchId];
+        if (done && done.done === true) {
+          out.treatLog.push({ id: uid(), name: x.name, kind: x.winner === 'me' ? 'got' : 'paid', amount: TR.UNIT, at: Number.isFinite(done.at) ? done.at : 0 });
+        }
+      }
+    }
     if (!Number.isFinite(out.sync.since)) out.sync.since = 0;
     if (!L.isId(out.settings.myId)) {
       out.settings.myId = L.newId((n) => crypto.getRandomValues(new Uint8Array(n)));
@@ -69,7 +83,7 @@
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
         version: 1, settings: db.settings, matches: db.matches, friends: db.friends, outbox: db.outbox,
-        requests: db.requests, blocked: db.blocked, sync: db.sync, treats: db.treats,
+        requests: db.requests, blocked: db.blocked, sync: db.sync, treatLog: db.treatLog, offers: db.offers,
       }));
     } catch (e) {
       toast('保存に失敗しました');
@@ -78,16 +92,6 @@
 
   function cleanName(v) {
     return L.cleanText(v);
-  }
-
-  // 奢りを果たしたかのメモ（奢りが決まった試合のID → 済んだ日時）
-  function sanitizeTreats(t) {
-    const out = {};
-    if (!t || typeof t !== 'object') return out;
-    for (const [id, v] of Object.entries(t)) {
-      if (/^[A-Za-z0-9_-]{1,80}$/.test(id) && v && v.done === true) out[id] = { done: true, at: Number.isFinite(v.at) ? v.at : 0 };
-    }
-    return out;
   }
 
   function sanitizeFriend(f) {
@@ -345,7 +349,7 @@
     if (next === friend.name) return false;
     const prev = friend.name;
     friend.name = next;
-    for (const m of db.matches) if (m.opponentId === friend.id) m.opponent = next;
+    renameFriendRecords(friend, prev);
     toast(`${prev}さんの名前が「${next}」に変わりました`);
     return true;
   }
@@ -358,14 +362,29 @@
     if (friend.custom || friend.nameAt) return;
     const next = uniqueFriendName(name, friend.id);
     if (next === friend.name) return;
+    const prev = friend.name;
     friend.name = next;
-    for (const m of db.matches) if (m.opponentId === friend.id) m.opponent = next;
+    renameFriendRecords(friend, prev);
+  }
+
+  // 友だちの表示名が変わったら、その友だちとの試合・奢りの記録の相手名もそろえる
+  function renameFriendRecords(friend, prev) {
+    for (const m of db.matches) if (m.opponentId === friend.id) m.opponent = friend.name;
+    for (const e of db.treatLog) if (e.name === prev) e.name = friend.name;
+    for (const o of db.offers) if (o.friendId === friend.id) o.name = friend.name;
   }
 
   function queueMatch(m) {
     if (m.received || !m.opponentId || !friendById(m.opponentId)) return;
     const p = L.matchPayload(m);
     enqueue(m.opponentId, L.outboxKey('m', m.id, p.rev), m.id, { t: 'match', m: p });
+  }
+
+  // 奢りの相殺の提案・返事を送る。処理済みの提案は覚えておき、再送されても二重に扱わない
+  function sendOffer(o, st) {
+    if (st !== 'ask') db.sync.offersDone = db.sync.offersDone.concat(o.id).slice(-200);
+    if (!friendById(o.friendId)) return;
+    enqueue(o.friendId, L.outboxKey('o', o.id, st), `offset:${o.id}`, { t: 'offset', id: o.id, st, amount: st === 'ask' ? o.amount : undefined });
   }
 
   function queueDelete(to, matchId) {
@@ -436,6 +455,25 @@
       }
       // 古い試合データを後から送り直されても復活させない
       db.sync.tomb[`${msg.from}:${msg.id}`] = Math.max(db.sync.tomb[`${msg.from}:${msg.id}`] || 0, msg.at || now);
+      return msg.key;
+    }
+    if (msg.t === 'offset') {
+      const o = db.offers.find((x) => x.id === msg.id && x.friendId === msg.from);
+      if (msg.st === 'ask') {
+        if (!o && !db.sync.offersDone.includes(msg.id)) {
+          db.offers.push({ id: msg.id, dir: 'in', friendId: msg.from, name: friend.name, amount: msg.amount, at: now });
+          toast(`${friend.name}さんから奢りの相殺の提案が届きました`);
+        }
+      } else if (o) {
+        db.offers = db.offers.filter((x) => x !== o);
+        db.sync.offersDone = db.sync.offersDone.concat(o.id).slice(-200);
+        if (o.dir === 'out' && msg.st === 'ok') {
+          db.treatLog.push({ id: uid(), name: o.name, kind: 'offset', amount: o.amount, at: now });
+          toast(`${friend.name}さんが合意したので、${TR.format(o.amount)}奢りずつ相殺しました`);
+        } else if (o.dir === 'out') {
+          toast(`${friend.name}さんは相殺を見送りました`);
+        }
+      }
       return msg.key;
     }
     if (msg.t === 'match') {
@@ -697,31 +735,40 @@
   }
 
   // ---------- 奢りメモ ----------
+  // 試合ごとに「N勝で1奢り」を選ぶ。勝てば相手から 1/N 奢り、負ければ相手へ 1/N 奢りがたまる
 
-  function treatOn() {
-    return !!(db.settings.treat && db.settings.treat.on);
-  }
-
-  function treatNeed() {
-    const n = db.settings.treat && db.settings.treat.need;
-    return TR.isNeed(n) ? n : 1;
-  }
-
-  // その相手との直近の試合が奢りの対象なら、次の試合も対象を初期値にする（毎回選び直さなくて済むように）
+  // その相手との直近の試合と同じ設定を初期値にする（毎回選び直さなくて済むように）
   function defaultTreatFor(name) {
     const key = (name || '').trim();
     const last = key && sortedMatches().find((m) => (m.opponent || '').trim() === key);
-    return !!(last && TR.isNeed(last.treat));
+    return last && TR.isNeed(last.treat) ? last.treat : 0;
+  }
+
+  function treatBalances() {
+    return TR.balances(db.matches, db.treatLog);
+  }
+
+  // 1試合で動く奢り（1/3 は小数にせず分数で出す）
+  function shareText(need) {
+    return need === 3 ? '1/3' : TR.format(TR.UNIT / need);
+  }
+
+  // 「あなた → 山田さん 1.5奢り ・ 山田さん → あなた 1奢り」
+  function balanceText(name, b) {
+    const parts = [];
+    if (b && b.iOwe) parts.push(`あなた → ${name}さん ${TR.format(b.iOwe)}奢り`);
+    if (b && b.owedToMe) parts.push(`${name}さん → あなた ${TR.format(b.owedToMe)}奢り`);
+    return parts.length ? parts.join(' ・ ') : '貸し借りなし';
   }
 
   function treatField(d) {
-    const need = d.id && TR.isNeed(d.treat) ? d.treat : treatNeed();
-    return `<span class="label">奢り</span>
-      <div class="seg" role="radiogroup">
-        <button type="button" role="radio" aria-checked="${!d.treat}" class="${d.treat ? '' : 'on'}" data-action="treat-pick" data-value="0">対象外</button>
-        <button type="button" role="radio" aria-checked="${!!d.treat}" class="${d.treat ? 'on' : ''}" data-action="treat-pick" data-value="1">🍜 対象（${need}勝で奢り）</button>
-      </div>
-      ${d.treat && d.opponent ? `<p class="hint small muted">${esc(treatProgressText(d.opponent))}</p>` : ''}`;
+    const cur = TR.isNeed(d.treat) ? d.treat : 0;
+    const name = (d.opponent || '').trim();
+    const b = name && treatBalances().get(name);
+    return `<span class="label">奢り（何勝で1奢り？）</span>
+      <div class="seg" role="radiogroup">${[[0, 'なし'], [1, '1勝'], [2, '2勝'], [3, '3勝']].map(([v, l]) =>
+        `<button type="button" role="radio" aria-checked="${v === cur}" class="${v === cur ? 'on' : ''}" data-action="treat-pick" data-value="${v}">${l}</button>`).join('')}</div>
+      ${cur ? `<p class="hint small muted">勝つと相手から、負けると相手へ ${shareText(cur)}奢り。${b && (b.iOwe || b.owedToMe) ? `いま：${esc(balanceText(name, b))}` : ''}</p>` : ''}`;
   }
 
   function refreshTreatField() {
@@ -729,57 +776,86 @@
     if (el && draft) el.innerHTML = treatField(draft);
   }
 
-  function treatProgressText(name) {
-    const s = TR.summarize(db.matches).get((name || '').trim());
-    if (!s || (!s.me && !s.opp)) return `${name}さんとの奢り勝負: これから`;
-    return `${name}さんとの奢り勝負: 自分 ${s.me}勝 - 相手 ${s.opp}勝（${s.need}勝で奢り）`;
-  }
-
-  function treatDecisionText(d, name) {
-    return d.winner === 'me' ? `${name}さんが奢る` : `${name}さんに奢る`;
-  }
-
-  // 未済の奢り（相手ごと）
-  function pendingTreats() {
-    const out = [];
-    for (const [name, s] of TR.summarize(db.matches)) {
-      for (const d of s.decided) if (!(db.treats[d.matchId] && db.treats[d.matchId].done)) out.push(Object.assign({ name }, d));
-    }
-    return out.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  }
-
-  function treatItem(d, name) {
-    const done = db.treats[d.matchId] && db.treats[d.matchId].done;
-    return `<li class="treat-item${done ? ' done' : ''}">
-      <span class="ti-main"><b>${d.winner === 'me' ? '🍜 ご馳走になる' : '💸 奢る'}</b><span class="muted small">${fmtDate(d.date)}${d.need > 1 ? ` ・ ${d.me}-${d.opp}で決着` : ''}${name ? ` ・ ${esc(name)}さん` : ''}</span></span>
-      <button type="button" class="btn small-btn ${done ? '' : 'primary'}" data-action="treat-done" data-id="${esc(d.matchId)}" aria-pressed="${!!done}">${done ? '済' : '未'}</button>
-    </li>`;
-  }
-
-  // 保存した試合で奢りが決まったら知らせる
+  // 保存した試合が奢りの対象なら、動いた奢りといまの貸し借りを知らせる
   function announceTreat(m) {
-    if (!TR.isNeed(m.treat)) return false;
-    const d = TR.decidedBy(db.matches, m.id);
-    if (d) {
-      toast(`🍜 奢り決定: ${treatDecisionText(d, m.opponent)}`);
-      return true;
-    }
-    // まだ決まっていなければ途中経過を知らせる（例: 2勝で奢りのうち1勝目）
-    const s = TR.summarize(db.matches).get((m.opponent || '').trim());
-    if (!s) return false;
-    toast(`🍜 ${m.mySets > m.oppSets ? '勝ち' : '負け'}（${m.mySets}-${m.oppSets}）・ 奢り勝負 自分 ${s.me}勝 - 相手 ${s.opp}勝（${s.need}勝で奢り）`);
+    const sh = TR.matchShare(m);
+    if (!sh) return false;
+    const name = m.opponent.trim();
+    toast(`🍜 ${sh.toMe ? '勝ち' : '負け'}（${m.mySets}-${m.oppSets}）で ${sh.toMe ? `${name}さん → あなた` : `あなた → ${name}さん`} +${shareText(m.treat)}奢り。いま ${balanceText(name, treatBalances().get(name))}`);
     return true;
   }
 
-  // まだ奢りが決まっていない途中経過（1勝以上ついている相手）
-  function treatsInProgress() {
-    const out = [];
-    for (const [name, s] of TR.summarize(db.matches)) if (s.me || s.opp) out.push({ name, me: s.me, opp: s.opp, need: s.need });
-    return out;
+  function friendForTreat(name) {
+    const f = friendByName(name);
+    return f && f.pub ? f : null;
   }
 
-  function progressLine(p) {
-    return `${p.name}さん：自分 ${p.me}勝 - 相手 ${p.opp}勝（${p.need}勝で奢り）`;
+  function isoOf(ms) {
+    if (!ms) return '';
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  // 相殺の提案（届いたもの・送ったもの）
+  function offerLine(o, withName) {
+    const f = friendById(o.friendId);
+    const name = esc(f ? f.name : o.name);
+    if (o.dir === 'in') {
+      return `<div class="offer"><span class="offer-text">🤝 ${name}さんから相殺の提案：お互いの奢りを <b>${TR.format(o.amount)}奢りずつ</b> 相殺</span>
+        <span class="offer-btns"><button type="button" class="btn small-btn primary" data-action="offer-accept" data-id="${esc(o.id)}">合意する</button>
+        <button type="button" class="btn small-btn" data-action="offer-decline" data-id="${esc(o.id)}">断る</button></span></div>`;
+    }
+    return `<div class="offer"><span class="offer-text">⇄ ${withName ? `${name}さんに` : ''}${TR.format(o.amount)}奢りずつの相殺を提案中（返事待ち）</span>
+      <span class="offer-btns"><button type="button" class="btn small-btn" data-action="offer-decline" data-id="${esc(o.id)}">取り下げる</button></span></div>`;
+  }
+
+  // 奢った・奢ってもらった・相殺のボタン（奢りは1回=1奢りずつ記録する）
+  function treatActions(name, b) {
+    const btns = [];
+    if (b.iOwe >= TR.UNIT) btns.push(`<button type="button" class="btn" data-action="treat-log" data-kind="paid" data-name="${esc(name)}">💸 1奢りした</button>`);
+    if (b.owedToMe >= TR.UNIT) btns.push(`<button type="button" class="btn" data-action="treat-log" data-kind="got" data-name="${esc(name)}">🍜 1奢ってもらった</button>`);
+    const off = TR.offsetAmount(b);
+    if (off && !db.offers.some((o) => o.name === name)) {
+      btns.push(`<button type="button" class="btn" data-action="treat-offset" data-name="${esc(name)}">⇄ ${TR.format(off)}奢りずつ相殺${friendForTreat(name) ? 'を提案' : ''}</button>`);
+    }
+    return btns.length ? `<div class="treat-actions">${btns.join('')}</div>` : '';
+  }
+
+  const LOG_TEXT = { paid: '💸 奢った', got: '🍜 奢ってもらった', offset: '⇄ 相殺' };
+
+  // 相手ごとの奢り（相手の成績ページ用）
+  function treatCard(name) {
+    const key = (name || '').trim();
+    const b = treatBalances().get(key) || { owedToMe: 0, iOwe: 0 };
+    const log = db.treatLog.filter((e) => e.name === key);
+    const offers = db.offers.filter((o) => o.name === key);
+    if (!treatBalances().has(key) && !log.length && !offers.length) return '';
+    return `<section class="card treat-card"><h3>🍜 奢り</h3>
+      ${offers.map((o) => offerLine(o, false)).join('')}
+      <div class="treat-now">
+        <div><span class="tn-val">${TR.format(b.iOwe)}</span><span class="tn-lbl">あなた → ${esc(key)}さん</span></div>
+        <div><span class="tn-val">${TR.format(b.owedToMe)}</span><span class="tn-lbl">${esc(key)}さん → あなた</span></div>
+      </div>
+      ${treatActions(key, b)}
+      ${!friendForTreat(key) && TR.offsetAmount(b) ? '<p class="hint small muted">相殺は相手と話して合意してから押してください。</p>' : ''}
+      ${log.length ? `<h4 class="sub-title">これまでの記録</h4><ul class="treat-list">${log.slice().reverse().map((e) => `<li class="treat-item">
+        <span class="ti-main"><b>${LOG_TEXT[e.kind]}</b><span class="muted small">${fmtDate(isoOf(e.at)) || '—'}</span></span><span class="ti-amt">${TR.format(e.amount)}奢り</span></li>`).join('')}</ul>` : ''}
+    </section>`;
+  }
+
+  // 奢りのまとめ（戦績ページ用）: 届いた相殺の提案と、相手ごとの貸し借り
+  function treatSummaryCard() {
+    const rows = [...treatBalances()].filter(([, b]) => b.iOwe || b.owedToMe);
+    const offers = db.offers;
+    if (!rows.length && !offers.length) return '';
+    const total = rows.reduce((t, [, b]) => ({ iOwe: t.iOwe + b.iOwe, owedToMe: t.owedToMe + b.owedToMe }), { iOwe: 0, owedToMe: 0 });
+    return `<section class="card treat-card"><h3>🍜 奢り</h3>
+      ${offers.map((o) => offerLine(o, true)).join('')}
+      ${rows.length > 1 ? `<p class="small">合計：あなたが奢る <b>${TR.format(total.iOwe)}奢り</b> ・ ご馳走になる <b>${TR.format(total.owedToMe)}奢り</b></p>` : ''}
+      <ul class="opp-stats">${rows.map(([name, b]) => `<li><button type="button" class="opp-row" data-action="opponent" data-name="${esc(name)}">
+        <span class="or-main"><span class="or-name">${esc(name)}</span><span class="or-sub">${esc(balanceText(name, b))}</span></span>
+        <span class="or-go" aria-hidden="true">›</span></button></li>`).join('')}</ul>
+    </section>`;
   }
 
   function myName() {
@@ -796,6 +872,8 @@
   let listQuery = '';
   let statsRange = 'all';
   let oppSort = 'recent'; // 対戦相手別の並び順（既定は最近対戦した順）
+  const OPP_ROWS = 5; // 対戦相手別で最初に出す人数
+  let oppAll = false;
   const END_NOTICE_MS = 3000;
   let endNoticeUntil = 0; // 得点板に「チェンジエンド」を出しておく時刻
   let wake = null; // 画面のスリープ防止（WakeLockSentinel を返す Promise）
@@ -829,7 +907,7 @@
       result: null,
       firstServer: 'me',
       memo: '',
-      treat: false,
+      treat: 0,
       treatTouched: false,
     };
   }
@@ -839,7 +917,7 @@
   const main = document.getElementById('main');
 
   function render() {
-    const views = { list: viewList, new: viewForm, edit: viewForm, live: viewLive, match: viewMatch, stats: viewStats, opponent: viewOpponent, friends: viewFriends, settings: viewSettings };
+    const views = { list: viewList, new: viewForm, edit: viewForm, live: viewLive, match: viewMatch, opponent: viewOpponent, friends: viewFriends, settings: viewSettings };
     // 友だち申請は入力中の画面以外ならどこでも上部に出し、その場で1回押せば追加できるようにする
     const banner = ['new', 'edit', 'live'].includes(view) ? '' : requestBanner();
     main.innerHTML = banner + (views[view] || viewList)();
@@ -849,7 +927,7 @@
     if (!board) exitFullscreen();
     keepAwake(view === 'live');
     const activeTab = view === 'edit' || view === 'live' ? 'new' : view === 'match' ? 'list'
-      : view === 'opponent' ? (params.from || 'stats') : view;
+      : view === 'opponent' ? (params.from === 'friends' ? 'friends' : 'list') : view;
     for (const b of document.querySelectorAll('#tabbar button')) {
       b.classList.toggle('active', b.dataset.view === activeTab);
     }
@@ -884,40 +962,45 @@
     </button>`;
   }
 
-  // 履歴
+  // 戦績：成績のまとめと試合の一覧を1ページに出す（期間の絞り込みはページ全体にかかる）
   function viewList() {
     const all = sortedMatches();
-    const q = listQuery.trim().toLowerCase();
-    const items = q
-      ? all.filter((m) => `${m.opponent} ${m.event} ${m.memo}`.toLowerCase().includes(q))
-      : all;
-    const wins = all.filter((m) => m.mySets > m.oppSets).length;
-
-    let html = liveBanner() + '<h2 class="view-title">履歴</h2>';
-    const owed = pendingTreats();
-    const going = treatsInProgress();
-    if (owed.length || going.length) {
-      const toMe = owed.filter((d) => d.winner === 'me').length;
-      const lines = going.slice(0, 3).map((p) => `<span class="tb-line">${esc(progressLine(p))}</span>`);
-      if (going.length > 3) lines.push(`<span class="tb-line muted">ほか${going.length - 3}人</span>`);
-      if (owed.length) lines.push(`<span class="tb-line">未済：${toMe ? `ご馳走になる ${toMe}回` : ''}${toMe && owed.length - toMe ? ' ・ ' : ''}${owed.length - toMe ? `奢る ${owed.length - toMe}回` : ''}</span>`);
-      html += `<button type="button" class="treat-banner" data-action="nav" data-view="stats"><span class="tb-body"><b>🍜 奢り</b>${lines.join('')}</span><span class="go">確認 ›</span></button>`;
-    }
-    html += `<section class="card summary">
-      <div><div class="big">${wins}<small>勝</small> ${all.length - wins}<small>敗</small></div><div class="muted">通算 ${all.length}試合</div></div>
-      <div class="rate"><div class="big">${pct(wins, all.length)}</div><div class="muted">勝率</div></div>
-    </section>`;
-
+    let html = liveBanner() + '<h2 class="view-title">戦績</h2>';
     if (!all.length) {
-      html += `<div class="empty">
+      return html + `<div class="empty">
         <p>まだ記録がありません。</p>
         <button type="button" class="btn primary" data-action="nav" data-view="new">最初の試合を記録する</button>
       </div>`;
-      return html;
     }
 
-    html += `<input type="search" class="search" id="listSearch" placeholder="相手・大会名・メモで検索" value="${esc(listQuery)}">`;
+    html += `<select id="statsRange" class="range" aria-label="期間">
+      ${[['all', '全期間'], ['year', '今年'], ['90', '直近90日'], ['30', '直近30日']].map(([v, l]) =>
+        `<option value="${v}" ${v === statsRange ? 'selected' : ''}>${l}</option>`).join('')}
+    </select>`;
+    const ms = all.filter(inRange);
+    if (!ms.length) return html + treatSummaryCard() + '<p class="empty">この期間の記録はありません。</p>';
 
+    const wins = ms.filter((m) => m.mySets > m.oppSets).length;
+    const setsWon = ms.reduce((a, m) => a + m.mySets, 0);
+    const setsLost = ms.reduce((a, m) => a + m.oppSets, 0);
+    const fullGame = ms.filter((m) => m.mySets + m.oppSets === m.bestOf);
+    const fullWins = fullGame.filter((m) => m.mySets > m.oppSets).length;
+    html += `<div class="tiles">
+      <div class="tile"><div class="t-val">${wins}-${ms.length - wins}</div><div class="t-lbl">勝-敗</div></div>
+      <div class="tile"><div class="t-val">${pct(wins, ms.length)}</div><div class="t-lbl">勝率</div></div>
+      <div class="tile"><div class="t-val">${pct(setsWon, setsWon + setsLost)}</div><div class="t-lbl">ゲーム取得率</div></div>
+      <div class="tile"><div class="t-val">${fullGame.length ? `${fullWins}-${fullGame.length - fullWins}` : '—'}</div><div class="t-lbl">最終ゲームまでもつれた試合</div></div>
+    </div>`;
+
+    html += treatSummaryCard();
+    html += opponentStats(ms);
+    html += rallyCard(ms);
+    html += eventTable(ms);
+
+    const q = listQuery.trim().toLowerCase();
+    const items = q ? ms.filter((m) => `${m.opponent} ${m.event} ${m.memo}`.toLowerCase().includes(q)) : ms;
+    html += `<h3 class="list-title">試合（${ms.length}）</h3>
+      <input type="search" class="search" id="listSearch" placeholder="相手・大会名・メモで検索" value="${esc(listQuery)}">`;
     let month = '';
     html += '<ul class="match-list">';
     for (const m of items) {
@@ -998,8 +1081,7 @@
         ${segmented('firstServer', [['me', esc(myName())], ['opp', '相手']], d.firstServer)}
       </div>`;
     }
-    // 奢りメモが有効なとき（または編集する試合が奢りの対象のとき）だけ選択肢を出す
-    if (treatOn() || (editing && d.treat)) html += `<div class="field" id="treatField">${treatField(d)}</div>`;
+    html += `<div class="field" id="treatField">${treatField(d)}</div>`;
     html += '</div>';
 
     const startsLive = d.mode === 'detail' && !editing;
@@ -1158,47 +1240,10 @@
   }
 
   function treatStatus(m) {
-    if (!TR.isNeed(m.treat)) return '';
-    const d = TR.decidedBy(db.matches, m.id);
-    if (!d) {
-      const round = TR.roundOf(db.matches, m.id);
-      if (round) return `<div class="treat-status">🍜 奢りの対象（${m.treat}勝で奢り）・ この勝負は ${fmtDate(round.date)} に ${round.me}-${round.opp} で決着：${esc(treatDecisionText(round, m.opponent))}</div>`;
-      return `<div class="treat-status">🍜 奢りの対象（${m.treat}勝で奢り）・ 勝負の途中：${esc(treatProgressText(m.opponent).replace(/^.*奢り勝負: /, ''))}</div>`;
-    }
-    const done = db.treats[d.matchId] && db.treats[d.matchId].done;
-    return `<div class="treat-status">🍜 この試合で決着：<b>${esc(treatDecisionText(d, m.opponent))}</b>
-      <button type="button" class="btn small-btn ${done ? '' : 'primary'}" data-action="treat-done" data-id="${esc(d.matchId)}" aria-pressed="${!!done}">${done ? '済' : '未'}</button></div>`;
-  }
-
-  // 相手ごとの奢りの状況（途中経過と、決まった奢りの一覧）
-  function treatCard(name) {
-    const s = TR.summarize(db.matches).get((name || '').trim());
-    if (!s) return '';
-    const decided = s.decided.slice().reverse();
-    const owedToMe = decided.filter((d) => d.winner === 'me' && !(db.treats[d.matchId] && db.treats[d.matchId].done)).length;
-    const iOwe = decided.filter((d) => d.winner === 'opp' && !(db.treats[d.matchId] && db.treats[d.matchId].done)).length;
-    return `<section class="card treat-card"><h3>🍜 奢り</h3>
-      <div class="treat-now">
-        <div><span class="tn-val">${s.me}</span><span class="tn-lbl">自分の勝ち</span></div>
-        <div class="tn-mid">${s.need}勝で奢り</div>
-        <div><span class="tn-val">${s.opp}</span><span class="tn-lbl">相手の勝ち</span></div>
-      </div>
-      ${owedToMe || iOwe ? `<p class="small">未済：${owedToMe ? `ご馳走になる <b>${owedToMe}回</b>` : ''}${owedToMe && iOwe ? ' ・ ' : ''}${iOwe ? `奢る <b>${iOwe}回</b>` : ''}</p>` : ''}
-      ${decided.length ? `<ul class="treat-list">${decided.map((d) => treatItem(d)).join('')}</ul>` : '<p class="muted small">まだ奢りは決まっていません。</p>'}
-    </section>`;
-  }
-
-  // 未済の奢り（成績タブ用）
-  function pendingTreatCard() {
-    const list = pendingTreats();
-    const going = treatsInProgress();
-    if (!list.length && !going.length) return '';
-    return `<section class="card treat-card"><h3>🍜 奢り</h3>
-      ${going.length ? `<h4 class="sub-title">勝負の途中</h4><ul class="opp-stats">${going.map((p) => `<li><button type="button" class="opp-row" data-action="opponent" data-name="${esc(p.name)}">
-        <span class="or-main"><span class="or-name">${esc(p.name)}</span><span class="or-sub">${p.need}勝で奢り</span></span>
-        <span class="or-rate">${p.me} - ${p.opp}</span><span class="or-go" aria-hidden="true">›</span></button></li>`).join('')}</ul>` : ''}
-      ${list.length ? `<h4 class="sub-title">未済の奢り（${list.length}件）</h4><ul class="treat-list">${list.map((d) => treatItem(d, d.name)).join('')}</ul>` : ''}
-    </section>`;
+    const sh = TR.matchShare(m);
+    if (!sh) return '';
+    const name = esc(m.opponent);
+    return `<div class="treat-status">🍜 奢りの対象（${m.treat}勝で1奢り）・ この試合で ${sh.toMe ? `${name}さん → あなた` : `あなた → ${name}さん`} ${shareText(m.treat)}奢り</div>`;
   }
 
   function linkStatus(m) {
@@ -1223,54 +1268,16 @@
     return (m.date || '') >= iso;
   }
 
-  function viewStats() {
-    const ms = sortedMatches().filter(inRange);
-    let html = `<h2 class="view-title">成績</h2>
-      <select id="statsRange" class="range">
-        ${[['all', '全期間'], ['year', '今年'], ['90', '直近90日'], ['30', '直近30日']].map(([v, l]) =>
-          `<option value="${v}" ${v === statsRange ? 'selected' : ''}>${l}</option>`).join('')}
-      </select>`;
-
-    if (!ms.length) return html + '<p class="empty">この期間の記録はありません。</p>';
-
-    const wins = ms.filter((m) => m.mySets > m.oppSets).length;
-    const setsWon = ms.reduce((a, m) => a + m.mySets, 0);
-    const setsLost = ms.reduce((a, m) => a + m.oppSets, 0);
-    const fullGame = ms.filter((m) => m.mySets + m.oppSets === m.bestOf);
-    const fullWins = fullGame.filter((m) => m.mySets > m.oppSets).length;
-
-    html += `<div class="tiles">
-      <div class="tile"><div class="t-val">${ms.length}</div><div class="t-lbl">試合</div></div>
-      <div class="tile"><div class="t-val">${wins}-${ms.length - wins}</div><div class="t-lbl">勝-敗</div></div>
-      <div class="tile"><div class="t-val">${pct(wins, ms.length)}</div><div class="t-lbl">勝率</div></div>
-      <div class="tile"><div class="t-val">${pct(setsWon, setsWon + setsLost)}</div><div class="t-lbl">ゲーム取得率</div></div>
-    </div>`;
-
-    const recent = ms.slice(0, 10).reverse();
-    html += `<section class="card"><h3>直近${recent.length}試合 <span class="muted small">（左が古い）</span></h3>
-      <div class="form-dots">${recent.map((m) => `<span class="fd ${m.mySets > m.oppSets ? 'w' : 'l'}" title="${esc(m.date)} vs ${esc(m.opponent)} ${m.mySets}-${m.oppSets}">${m.mySets > m.oppSets ? '○' : '●'}</span>`).join('')}</div>
-      ${fullGame.length ? `<p class="muted small">最終ゲームまでもつれた試合: ${fullWins}勝 ${fullGame.length - fullWins}敗</p>` : ''}
-    </section>`;
-
-    html += pendingTreatCard();
-    html += opponentStats(ms);
-    html += rallyCard(ms);
-    if (ms.some((m) => m.event)) html += groupTable('大会・練習別', ms, 'event');
-    return html;
-  }
-
-  // 対戦相手ごとの成績（勝率・勝敗・ゲーム数・最終対戦日）
+  // 対戦相手ごとの成績（勝率・勝敗・最終対戦日）。多いときは上位だけ出して、残りはボタンで開く
   function opponentStats(ms) {
     const groups = new Map();
     // ms は新しい順なので、最初に出てきた試合がその相手との最終対戦
     ms.forEach((m, order) => {
       const name = (m.opponent || '').trim();
       if (!name) return;
-      const g = groups.get(name) || { name, n: 0, w: 0, sw: 0, sl: 0, last: m.date, order };
+      const g = groups.get(name) || { name, n: 0, w: 0, last: m.date, order };
       g.n++;
       if (m.mySets > m.oppSets) g.w++;
-      g.sw += m.mySets;
-      g.sl += m.oppSets;
       groups.set(name, g);
     });
     const sorters = {
@@ -1280,6 +1287,7 @@
       name: (a, b) => a.name.localeCompare(b.name, 'ja'),
     };
     const rows = [...groups.values()].sort(sorters[oppSort] || sorters.recent);
+    const shown = oppAll ? rows : rows.slice(0, OPP_ROWS);
     return `<section class="card">
       <div class="card-head"><h3>対戦相手別 <span class="muted small">（${rows.length}人）</span></h3>
         <select id="oppSort" class="sort" aria-label="並び順">
@@ -1287,15 +1295,15 @@
             `<option value="${v}" ${v === oppSort ? 'selected' : ''}>${l}</option>`).join('')}
         </select>
       </div>
-      <ul class="opp-stats">${rows.map((g) => `<li><button type="button" class="opp-row" data-action="opponent" data-name="${esc(g.name)}">
+      <ul class="opp-stats">${shown.map((g) => `<li><button type="button" class="opp-row" data-action="opponent" data-name="${esc(g.name)}">
         <span class="or-main">
           <span class="or-name">${friendByName(g.name) ? '🔗 ' : ''}${esc(g.name)}</span>
-          <span class="or-sub">${g.w}勝${g.n - g.w}敗 ・ ゲーム ${g.sw}-${g.sl} ・ 最終 ${fmtDate(g.last) || '—'}</span>
-          <span class="or-bar" aria-hidden="true"><span data-w="${Math.round((g.w / g.n) * 1000) / 10}"></span></span>
+          <span class="or-sub">${g.w}勝${g.n - g.w}敗 ・ 最終 ${fmtDate(g.last) || '—'}</span>
         </span>
         <span class="or-rate">${pct(g.w, g.n)}</span>
         <span class="or-go" aria-hidden="true">›</span>
       </button></li>`).join('')}</ul>
+      ${rows.length > shown.length ? `<button type="button" class="btn block" data-action="opp-more">ほか${rows.length - shown.length}人を表示</button>` : ''}
     </section>`;
   }
 
@@ -1365,23 +1373,22 @@
     return html;
   }
 
-  function groupTable(title, ms, key) {
+  // 大会・練習ごとの勝敗（大会名を入れていない試合は数えない）
+  function eventTable(ms) {
     const groups = new Map();
     for (const m of ms) {
-      // 大会名を入れていない試合は「大会・練習別」に出さない
-      if (key === 'event' && !(m.event || '').trim()) continue;
-      const k = (m[key] || '').trim() || '（未入力）';
-      const g = groups.get(k) || { n: 0, w: 0, sw: 0, sl: 0 };
+      const k = (m.event || '').trim();
+      if (!k) continue;
+      const g = groups.get(k) || { n: 0, w: 0 };
       g.n++;
       if (m.mySets > m.oppSets) g.w++;
-      g.sw += m.mySets;
-      g.sl += m.oppSets;
       groups.set(k, g);
     }
+    if (!groups.size) return '';
     const rows = [...groups.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0], 'ja'));
-    return `<section class="card"><h3>${title}</h3><table class="table">
-      <thead><tr><th>${key === 'opponent' ? '相手（タップで詳細）' : '名前'}</th><th>勝-敗</th><th>勝率</th><th>ゲーム</th></tr></thead>
-      <tbody>${rows.map(([k, g]) => `<tr><td>${key === 'opponent' && k !== '（未入力）' ? opponentLink(k, esc(k)) : esc(k)}</td><td>${g.w}-${g.n - g.w}</td><td>${pct(g.w, g.n)}</td><td>${g.sw}-${g.sl}</td></tr>`).join('')}</tbody>
+    return `<section class="card"><h3>大会・練習別</h3><table class="table">
+      <thead><tr><th>名前</th><th>勝-敗</th><th>勝率</th></tr></thead>
+      <tbody>${rows.map(([k, g]) => `<tr><td>${esc(k)}</td><td>${g.w}-${g.n - g.w}</td><td>${pct(g.w, g.n)}</td></tr>`).join('')}</tbody>
     </table></section>`;
   }
 
@@ -1478,20 +1485,6 @@
     return html;
   }
 
-  function treatSettingCard() {
-    const on = treatOn();
-    const need = treatNeed();
-    const seg = (key, opts, cur) => `<div class="seg" role="radiogroup">${opts.map(([v, l]) =>
-      `<button type="button" role="radio" aria-checked="${String(v) === String(cur)}" class="${String(v) === String(cur) ? 'on' : ''}" data-action="treat-setting" data-key="${key}" data-value="${v}">${l}</button>`).join('')}</div>`;
-    return `<div class="card form">
-      <h3>🍜 奢りメモ</h3>
-      <p class="muted small">「負けた方が勝った方に奢る」約束の勝敗と、奢りを果たしたかをメモできます。オンにすると、試合の記録画面で「奢りの対象」を選べます。</p>
-      <div class="field">${seg('on', [[0, 'オフ'], [1, 'オン']], on ? 1 : 0)}</div>
-      ${on ? `<div class="field"><span class="label">何勝したら奢り？</span>${seg('need', [[1, '1勝'], [2, '2勝'], [3, '3勝']], need)}
-        <p class="hint small muted">先にこの勝数に達した方が勝ち（負けた方が奢る）。決まったら0勝から数え直します。変更はこれから記録する試合に使われます。</p></div>` : ''}
-    </div>`;
-  }
-
   function viewSettings() {
     return `<h2 class="view-title">設定</h2>
       <div class="card form">
@@ -1504,7 +1497,6 @@
           <p class="hint small muted">「自動」は端末のダークモード設定に合わせます。</p>
         </div>
       </div>
-      ${treatSettingCard()}
       <div class="card">
         <h3>データ</h3>
         <p class="muted small">記録はこの端末のブラウザ内に保存されます。機種変更やバックアップにはエクスポートを使ってください。</p>
@@ -1533,7 +1525,7 @@
         draft[el.dataset.field] = el.value;
         if (el.dataset.field === 'opponent') {
           document.getElementById('oppSuggest').innerHTML = opponentChips(el.value);
-          if (!draft.treatTouched && treatOn()) draft.treat = defaultTreatFor(el.value);
+          if (!draft.treatTouched) draft.treat = defaultTreatFor(el.value);
           refreshTreatField();
         }
       });
@@ -1653,11 +1645,9 @@
     go('list');
   }
 
-  // フォームの選択から、保存する「何勝で奢りか」を決める（対象外なら 0）
+  // フォームの選択から、保存する「何勝で1奢りか」を決める（対象外なら 0）
   function draftTreat(d) {
-    if (!d.treat) return 0;
-    if (!treatOn() && !d.id) return 0;
-    return TR.isNeed(d.treat) ? d.treat : treatNeed();
+    return TR.isNeed(d.treat) ? d.treat : 0;
   }
 
   function startLive() {
@@ -1733,7 +1723,7 @@
   function exportData() {
     // 鍵やIDは入れない（ファイルが他人に渡ってもなりすましに使えないように）
     const settings = { myName: db.settings.myName, theme: db.settings.theme };
-    const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), settings, matches: db.matches, friends: db.friends }, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), settings, matches: db.matches, friends: db.friends, treatLog: db.treatLog }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `tt-record-${today()}.json`;
@@ -1756,6 +1746,13 @@
         db.matches.push(...added);
         if (Array.isArray(data.friends)) {
           for (const f of data.friends.map(sanitizeFriend).filter(Boolean)) if (!friendById(f.id)) addFriend(f.id, f.name, f.pub);
+        }
+        if (Array.isArray(data.treatLog)) {
+          const have = new Set(db.treatLog.map((e) => e.id));
+          for (const e of data.treatLog.filter(TR.isLogEntry)) {
+            if (typeof e.id === 'string' && have.has(e.id)) continue;
+            db.treatLog.push({ id: typeof e.id === 'string' ? e.id.slice(0, 40) : uid(), name: cleanName(e.name), kind: e.kind, amount: e.amount, at: Number.isFinite(e.at) ? e.at : 0 });
+          }
         }
         saveDb();
         toast(`${added.length}試合を読み込みました`);
@@ -1801,45 +1798,75 @@
         const input = main.querySelector('[data-field="opponent"]');
         input.value = draft.opponent;
         document.getElementById('oppSuggest').innerHTML = opponentChips(draft.opponent);
-        if (!draft.treatTouched && treatOn()) draft.treat = defaultTreatFor(draft.opponent);
+        if (!draft.treatTouched) draft.treat = defaultTreatFor(draft.opponent);
         refreshTreatField();
         break;
       }
       case 'treat-pick':
-        draft.treat = t.dataset.value === '1' ? (draft.id && TR.isNeed(draft.treat) ? draft.treat : treatNeed()) : 0;
+        draft.treat = Number(t.dataset.value) || 0;
         draft.treatTouched = true;
         refreshTreatField();
         break;
-      case 'treat-done': {
-        const id = t.dataset.id;
-        const prev = db.treats[id];
-        const setDone = (v) => {
-          if (v) db.treats[id] = v;
-          else delete db.treats[id];
+      case 'treat-log': {
+        // 奢った / 奢ってもらった（押した直後のポップアップから元に戻せる）
+        const entry = { id: uid(), name: t.dataset.name, kind: t.dataset.kind === 'got' ? 'got' : 'paid', amount: TR.UNIT, at: Date.now() };
+        db.treatLog.push(entry);
+        saveDb();
+        render();
+        toast(entry.kind === 'got' ? '1奢りしてもらったと記録しました' : '1奢りしたと記録しました', () => {
+          db.treatLog = db.treatLog.filter((e) => e !== entry);
           saveDb();
           render();
-        };
-        setDone(prev ? null : { done: true, at: Date.now() });
-        // 押した直後のポップアップから、間違えたときにすぐ元に戻せる
-        toast(prev ? '奢りを「未」に戻しました' : '奢りを「済」にしました', () => {
-          setDone(prev);
           toast('元に戻しました');
         });
+        break;
+      }
+      case 'treat-offset': {
+        const name = t.dataset.name;
+        const amount = TR.offsetAmount(treatBalances().get(name));
+        if (!amount) break;
+        const f = friendForTreat(name);
+        if (f) {
+          // 連携中の友だちには提案を送り、相手が合意したら相殺する
+          const o = { id: uid(), dir: 'out', friendId: f.id, name, amount, at: Date.now() };
+          db.offers.push(o);
+          sendOffer(o, 'ask');
+          saveDb();
+          sync();
+          render();
+          toast(`${f.name}さんが合意すると相殺されます`);
+          break;
+        }
+        const entry = { id: uid(), name, kind: 'offset', amount, at: Date.now() };
+        db.treatLog.push(entry);
+        saveDb();
+        render();
+        toast(`${TR.format(amount)}奢りずつ相殺しました`, () => {
+          db.treatLog = db.treatLog.filter((e) => e !== entry);
+          saveDb();
+          render();
+          toast('元に戻しました');
+        });
+        break;
+      }
+      case 'offer-accept':
+      case 'offer-decline': {
+        const o = db.offers.find((x) => x.id === t.dataset.id);
+        if (!o) break;
+        db.offers = db.offers.filter((x) => x !== o);
+        const ok = a === 'offer-accept';
+        if (ok) db.treatLog.push({ id: uid(), name: o.name, kind: 'offset', amount: o.amount, at: Date.now() });
+        sendOffer(o, ok ? 'ok' : 'no');
+        saveDb();
+        sync();
+        render();
+        toast(ok ? `${TR.format(o.amount)}奢りずつ相殺しました` : o.dir === 'in' ? '相殺の提案を断りました' : '相殺の提案を取り下げました');
         break;
       }
       case 'toast-undo': {
         const undo = toastUndo;
         toastUndo = null;
         if (undo) undo();
-        break;
-      }
-      case 'treat-setting': {
-        const cur = Object.assign({ on: false, need: 1 }, db.settings.treat);
-        if (t.dataset.key === 'on') cur.on = t.dataset.value === '1';
-        if (t.dataset.key === 'need') cur.need = Number(t.dataset.value);
-        db.settings.treat = { on: !!cur.on, need: TR.isNeed(cur.need) ? cur.need : 1 };
-        saveDb();
-        render();
         break;
       }
       case 'pick-result':
@@ -1930,6 +1957,10 @@
         });
         break;
       }
+      case 'opp-more':
+        oppAll = true;
+        render();
+        break;
       case 'export':
         exportData();
         break;
@@ -1991,6 +2022,7 @@
         const f = friendById(t.dataset.id);
         const name = f && prompt(`あなたの画面での${f.remoteName ? `「${f.remoteName}」さんの` : ''}表示名（相手には伝わりません。空欄で相手が設定した名前に戻します）`, f.name);
         if (name === null || name === undefined || !f) break;
+        const prev = f.name;
         if (name.trim()) {
           f.name = uniqueFriendName(name, f.id);
           f.custom = true;
@@ -1998,8 +2030,8 @@
           f.custom = false;
           f.name = uniqueFriendName(f.remoteName || f.name, f.id);
         }
-        // この友だちとの試合の相手名もそろえる
-        for (const m of db.matches) if (m.opponentId === f.id) m.opponent = f.name;
+        // この友だちとの試合・奢りの記録の相手名もそろえる
+        renameFriendRecords(f, prev);
         saveDb();
         render();
         break;

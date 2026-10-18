@@ -13,6 +13,8 @@
   --lose-bg: #fdecea;
   --chip: #eef2f7;
   --seg-on: #ffffff;
+  --toast-bg: rgba(20, 24, 30, .92);
+  --toast-line: transparent;
   --radius: 14px;
   --tabbar-h: 62px;
 }
@@ -34,6 +36,8 @@
     --lose-bg: #3a1716;
     --chip: #242a32;
     --seg-on: #3b4552;
+    --toast-bg: #2c333d;
+    --toast-line: #4a5462;
   }
 }
 
@@ -52,6 +56,8 @@
   --lose-bg: #3a1716;
   --chip: #242a32;
   --seg-on: #3b4552;
+  --toast-bg: #2c333d;
+  --toast-line: #4a5462;
 }
 
 :root { color-scheme: light; }
@@ -334,7 +340,9 @@ button { cursor: pointer; touch-action: manipulation; }
 .flag.mp { animation: blink 1s infinite; }
 
 .live-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
-.live-actions .board-open { grid-column: 1 / -1; }
+.live-actions .board-open, .live-actions .pause { grid-column: 1 / -1; }
+/* 破棄は押し間違えにくいよう、一時中断から離して小さく置く */
+.live-actions .discard { grid-column: 1 / -1; justify-self: end; min-height: 36px; padding: 4px 8px; border: 0; background: none; font-size: 13px; }
 
 .finished { text-align: center; }
 .finished-title { font-size: 26px; font-weight: 800; }
@@ -393,12 +401,19 @@ button { cursor: pointer; touch-action: manipulation; }
 .fd.l { color: var(--lose); }
 
 /* ---- トースト ---- */
+/* 左右16pxの内側で中央に置く（left:50% だと画面の半分の幅で折り返してしまう） */
 .toast {
   position: fixed;
-  left: 50%;
+  left: 16px;
+  right: 16px;
+  margin: 0 auto;
+  width: fit-content;
+  max-width: 560px;
   bottom: calc(var(--tabbar-h) + 16px + env(safe-area-inset-bottom));
-  transform: translate(-50%, 20px);
-  background: rgba(20, 24, 30, .92);
+  transform: translateY(20px);
+  background: var(--toast-bg);
+  border: 1px solid var(--toast-line);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
   color: #fff;
   padding: 10px 16px;
   border-radius: 999px;
@@ -407,10 +422,14 @@ button { cursor: pointer; touch-action: manipulation; }
   pointer-events: none;
   transition: opacity .2s, transform .2s;
   z-index: 20;
-  max-width: calc(100% - 32px);
   text-align: center;
 }
-.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.show { opacity: 1; transform: translateY(0); }
+/* 固定の「保存」ボタンがある画面では、その上に出す */
+body:has(.sticky-action) .toast { bottom: calc(var(--tabbar-h) + 72px + env(safe-area-inset-bottom)); }
+/* 試合中・得点板では、点数やボタンにかぶらないよう画面の上に出す */
+body.is-live .toast, body.is-board .toast { top: calc(10px + env(safe-area-inset-top)); bottom: auto; transform: translateY(-20px); }
+body.is-live .toast.show, body.is-board .toast.show { transform: translateY(0); }
 .toast.actionable { pointer-events: auto; display: flex; align-items: center; gap: 12px; text-align: left; border-radius: 14px; }
 .toast-btn { border: 0; background: none; color: #8ab4ff; font-weight: 700; padding: 4px 2px; white-space: nowrap; }
 
@@ -443,7 +462,8 @@ body.is-live .pad { min-height: 220px; }
   body.is-live .pad { min-height: 0; padding: 4px; gap: 2px; }
   body.is-live .pad-score { font-size: clamp(44px, 20vh, 96px); }
   body.is-live .live-actions { grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 6px 0 0; }
-  body.is-live .live-actions .board-open { grid-column: auto; }
+  body.is-live .live-actions .board-open, body.is-live .live-actions .pause { grid-column: auto; }
+  body.is-live .live-actions .discard { grid-column: auto; justify-self: stretch; }
   body.is-live .live-actions .btn { min-height: 44px; padding: 4px 8px; font-size: 13px; }
 }
 
@@ -686,3 +706,4 @@ body.is-board .main {
 .support-card p { margin: 0 0 6px; }
 .support-card ul { margin: 6px 0 0; padding-left: 1.2em; }
 .support-card li { margin: 4px 0; }
+.new-opp-hint { flex-basis: 100%; margin: 2px 0 0; font-size: 12px; color: var(--muted); }

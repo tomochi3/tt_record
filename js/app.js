@@ -285,7 +285,13 @@
     const chips = opponentSuggestions(query).map((s) =>
       `<button type="button" class="opp-chip" data-action="pick-opp" data-name="${esc(s.name)}">${friendByName(s.name) ? '🔗 ' : ''}${esc(s.name)}<small>${s.n ? `${s.w}勝${s.n - s.w}敗` : '友だち'}</small></button>`).join('');
     const f = friendByName(query);
-    const hint = f ? `<p class="link-hint">🔗 ${esc(f.name)}さんと連携中。保存すると相手のアプリにも結果が届きます。</p>` : '';
+    let hint = f ? `<p class="link-hint">🔗 ${esc(f.name)}さんと連携中。保存すると相手のアプリにも結果が届きます。</p>` : '';
+    // 入力途中の名前のまま保存しないよう、候補があるのに一致しないときは新しい相手になることを知らせる
+    const q = (query || '').trim();
+    const list = opponentSuggestions(query);
+    if (!f && q && list.length && !list.some((s) => L.nameKey(s.name) === L.nameKey(q))) {
+      hint = `<p class="new-opp-hint">「${esc(q)}」は新しい相手として記録されます。${esc(list[0].name)}さんなら上の候補をタップ</p>`;
+    }
     return chips + hint;
   }
 
@@ -1508,7 +1514,7 @@
       <div class="tile"><div class="t-val">${wins}-${ms.length - wins}</div><div class="t-lbl">勝-敗</div></div>
       <div class="tile"><div class="t-val">${pct(wins, ms.length)}</div><div class="t-lbl">勝率</div></div>
       <div class="tile"><div class="t-val">${pct(setsWon, setsWon + setsLost)}</div><div class="t-lbl">ゲーム取得率</div></div>
-      <div class="tile"><div class="t-val">${fullGame.length ? `${fullWins}-${fullGame.length - fullWins}` : '—'}</div><div class="t-lbl">最終ゲームまでもつれた試合</div></div>
+      <div class="tile"><div class="t-val">${fullGame.length ? `${fullWins}-${fullGame.length - fullWins}` : '—'}</div><div class="t-lbl">フルゲームの勝敗</div></div>
     </div>`;
 
     html += treatSummaryCard();
@@ -1672,11 +1678,11 @@
     html += `<div class="game-label">第${cur.gameIndex + 1}ゲーム${cur.me >= 10 && cur.opp >= 10 ? ' ・ ジュース' : ''}</div>
       <div class="pads">${pad('me')}${pad('opp')}</div>
       <div class="live-actions">
-        <button type="button" class="btn board-open" data-action="board-open">📺 得点板にする</button>
         <button type="button" class="btn" data-action="live-undo" ${live.rally.length ? '' : 'disabled'}>↶ 1点戻す</button>
         <button type="button" class="btn" data-action="live-swap-serve" title="最初のサーブを入れ替える">⇄ 先サーブを入替</button>
-        <button type="button" class="btn ghost" data-action="nav" data-view="list">一時中断</button>
-        <button type="button" class="btn ghost danger" data-action="live-discard">試合を破棄</button>
+        <button type="button" class="btn board-open" data-action="board-open">📺 得点板にする</button>
+        <button type="button" class="btn ghost pause" data-action="nav" data-view="list">一時中断</button>
+        <button type="button" class="btn ghost danger discard" data-action="live-discard">試合を破棄</button>
       </div>`;
     return html;
   }
@@ -1715,12 +1721,12 @@
     const m = db.matches.find((x) => x.id === params.id);
     if (!m) return viewList();
     const win = m.mySets > m.oppSets;
-    let html = `<button type="button" class="back" data-action="back">‹ ${params.back ? 'vs ' + esc(params.back.params.name) : '履歴'}</button>
+    let html = `<button type="button" class="back" data-action="back">‹ ${params.back ? 'vs ' + esc(params.back.params.name) : '戦績'}</button>
       <section class="card match-head ${win ? 'win' : 'lose'}">
         <div class="mh-result">${win ? '勝ち' : '負け'}</div>
         <div class="mh-score">${m.mySets} - ${m.oppSets}</div>
         <div class="mh-opp">${opponentLink(m.opponent, `vs ${esc(m.opponent)} ›`)}</div>
-        <div class="muted">${fmtDateFull(m.date)}${m.event ? ` ・ ${esc(m.event)}` : ''} ・ ${m.bestOf}ゲームマッチ ・ ${m.mode === 'detail' ? '1点ごとに記録' : 'セット数のみ'}</div>
+        <div class="muted">${fmtDateFull(m.date)}${m.event ? ` ・ ${esc(m.event)}` : ''} ・ ${m.bestOf}ゲームマッチ${m.mode === 'detail' ? ' ・ 1点ごとに記録' : ''}</div>
         ${linkStatus(m)}
         ${treatStatus(m)}
       </section>`;
@@ -1880,7 +1886,7 @@
       <div class="tiles">
         <div class="tile"><div class="t-val">${ms.length}</div><div class="t-lbl">対戦数</div></div>
         <div class="tile"><div class="t-val">${pct(sw, sw + sl)}</div><div class="t-lbl">ゲーム取得率（${sw}-${sl}）</div></div>
-        <div class="tile"><div class="t-val">${full.length ? `${fullW}-${full.length - fullW}` : '—'}</div><div class="t-lbl">最終ゲームまでもつれた試合</div></div>
+        <div class="tile"><div class="t-val">${full.length ? `${fullW}-${full.length - fullW}` : '—'}</div><div class="t-lbl">フルゲームの勝敗</div></div>
         <div class="tile"><div class="t-val">${streak}${ms[0].mySets > ms[0].oppSets ? '連勝' : '連敗'}</div><div class="t-lbl">現在</div></div>
       </div>
       <section class="card"><h3>直近${recent.length}試合 <span class="muted small">（左が古い）</span></h3>
@@ -2009,7 +2015,7 @@
   function viewSettings() {
     return `<h2 class="view-title">設定</h2>
       <div class="card form">
-        <label>自分の名前（スコアボードに表示）<input type="text" id="myName" value="${esc(db.settings.myName)}" maxlength="20"></label>
+        <label>自分の名前（友だち・得点板に表示）<input type="text" id="myName" value="${esc(db.settings.myName)}" maxlength="20"></label>
         <div class="field"><span class="label">画面の明るさ</span>
           <div class="seg" role="radiogroup">${[['auto', '自動'], ['light', 'ライト'], ['dark', 'ダーク']].map(([v, l]) => {
             const on = (db.settings.theme || 'auto') === v;
@@ -2021,10 +2027,10 @@
       ${otsCard()}
       <div class="card">
         <h3>データ</h3>
-        <p class="muted small">記録はこの端末のブラウザ内に保存されます。機種変更やバックアップにはエクスポートを使ってください。</p>
+        <p class="muted small">記録はこの端末の中だけにあります。機種変更の前はエクスポートしてください。</p>
         ${storageNote()}
         <button type="button" class="btn block" data-action="export">エクスポート（JSON）<span class="no-share">公開しないで</span></button>
-        <p class="no-share-note">エクスポートしたファイルには、試合の記録・メモ・友だちの一覧が入っています。自分のバックアップ用にだけ使ってください。</p>
+        <p class="no-share-note">試合の記録・メモ・友だちの一覧が入ります。自分のバックアップ用にだけ使ってください。</p>
         <label class="btn block file-btn">インポート（JSON）<input type="file" id="importFile" accept="application/json,.json"></label>
         <button type="button" class="btn block danger" data-action="wipe">すべての記録を削除</button>
       </div>

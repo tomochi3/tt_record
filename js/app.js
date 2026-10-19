@@ -1542,14 +1542,13 @@
     return html;
   }
 
-  // 一覧の奢りの印：この試合で動いた量と向き（勝ち＝もらう +1/2、負け＝奢る −1/2）
-  const SHARE_GLYPH = { 1: '1', 2: '1/2', 3: '1/3' };
+  // 一覧の奢りの印：この試合で動いた量と向きを分数のように表す（勝ち＝もらう +🍜/2、負け＝奢る −🍜/3、1勝で1奢りは ±🍜）
   function treatChip(m) {
     const sh = TR.matchShare(m);
     if (!sh) return '';
     const sign = sh.toMe ? '+' : '−';
     const label = `${m.treat}勝で1奢り・この試合で${sh.toMe ? 'もらう' : '奢る'} ${shareText(m.treat)}奢り`;
-    return `<span class="chip treat ${sh.toMe ? 'plus' : 'minus'}" title="${label}" aria-label="${label}">🍜 ${sign}${SHARE_GLYPH[m.treat]}</span>`;
+    return `<span class="chip treat ${sh.toMe ? 'plus' : 'minus'}" title="${label}" aria-label="${label}">${sign}🍜${m.treat > 1 ? `/${m.treat}` : ''}</span>`;
   }
 
   function matchItem(m) {

@@ -1542,6 +1542,15 @@
     return html;
   }
 
+  // 一覧の奢りの印：この試合で動いた量と向きを分数のように表す（勝ち＝もらう +🍜/2、負け＝奢る −🍜/3、1勝で1奢りは ±🍜）
+  function treatChip(m) {
+    const sh = TR.matchShare(m);
+    if (!sh) return '';
+    const sign = sh.toMe ? '+' : '−';
+    const label = `${m.treat}勝で1奢り・この試合で${sh.toMe ? 'もらう' : '奢る'} ${shareText(m.treat)}奢り`;
+    return `<span class="chip treat ${sh.toMe ? 'plus' : 'minus'}" title="${label}" aria-label="${label}">${sign}🍜${m.treat > 1 ? `/${m.treat}` : ''}</span>`;
+  }
+
   function matchItem(m) {
     return `<li><button type="button" class="match-item" data-action="open" data-id="${esc(m.id)}">
         ${resultBadge(m)}
@@ -1550,7 +1559,7 @@
           <span class="opp">vs ${esc(m.opponent)}</span>
           ${m.event ? `<span class="event">${esc(m.event)}</span>` : ''}
         </span>
-        <span class="meta"><span>${TR.isNeed(m.treat) ? '<span class="chip treat" title="奢りの対象">🍜</span>' : ''}${m.opponentId ? '<span class="chip link">🔗</span>' : ''}${m.mode === 'detail' ? '<span class="chip">1点ごと</span>' : ''}</span><span class="date">${fmtDate(m.date)}</span></span>
+        <span class="meta"><span>${treatChip(m)}${m.opponentId ? '<span class="chip link">🔗</span>' : ''}${m.mode === 'detail' ? '<span class="chip">1点ごと</span>' : ''}</span><span class="date">${fmtDate(m.date)}</span></span>
       </button></li>`;
   }
 

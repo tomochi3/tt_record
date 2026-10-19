@@ -141,3 +141,54 @@ test('刻印の元データ: 署名つきなら確かめられる', async () => 
   assert.equal((await G.checkRoot(JSON.parse(text))).ok, true);
   assert.equal((await G.checkRoot(Object.assign(JSON.parse(text), { at: 'u' }))).ok, false);
 });
+
+async function buildChain(keys, from, to, bodies) {
+  const texts = [];
+  let p = '';
+  const all = [{ t: 'key', spub: keys.spub }].concat(bodies);
+  for (let i = 0; i < all.length; i++) {
+    const e = await G.sign(keys.spriv, Object.assign({ v: 1, from, name: from === A ? '太郎' : '花子' }, all[i], { L: { s: i + 1, p, at: i + 1, to } }));
+    p = await G.entryHash(e);
+    texts.push(JSON.stringify(e));
+  }
+  return texts;
+}
+
+test('帳簿まるごと: 署名とつながりを確かめ、途中の書き換えを見つける', async () => {
+  const k = await G.generateSigningKeys();
+  const texts = await buildChain(k, A, B, [{ t: 'match', m: { id: 'm1', rev: 1, date: '2026-10-01', mySets: 3, oppSets: 1 } }]);
+  const r = await G.checkChain(texts);
+  assert.equal(r.ok, true, r.why);
+  assert.equal(r.name, '太郎');
+  const forged = JSON.parse(texts[1]);
+  forged.m.mySets = 1; forged.m.oppSets = 3;
+  const bad = await G.checkChain([texts[0], JSON.stringify(forged)]);
+  assert.equal(bad.ok, false);
+  assert.equal(bad.at, 2);
+});
+
+test('対戦成績: 変更・取り消しをたどり、2人が記録した同じ試合は1つにまとめる', async () => {
+  const ka = await G.generateSigningKeys();
+  const kb = await G.generateSigningKeys();
+  const a = await buildChain(ka, A, B, [
+    { t: 'match', m: { id: 'm1', rev: 1, date: '2026-10-01', mySets: 3, oppSets: 1 } },
+    { t: 'match', m: { id: 'm2', rev: 2, date: '2026-10-02', mySets: 3, oppSets: 2 } },
+    { t: 'match', m: { id: 'm2', rev: 3, date: '2026-10-02', mySets: 2, oppSets: 3 } }, // 結果を直した
+    { t: 'match', m: { id: 'm3', rev: 4, date: '2026-10-03', mySets: 3, oppSets: 0 } },
+    { t: 'del', id: 'm3', at: 5 },
+  ]);
+  const b = await buildChain(kb, B, A, [
+    { t: 'match', m: { id: 'x1', rev: 1, date: '2026-10-01', mySets: 1, oppSets: 3 } }, // m1 と同じ試合
+    { t: 'match', m: { id: 'x2', rev: 2, date: '2026-10-04', mySets: 3, oppSets: 1 } },
+  ]);
+  const r = await G.checkLedgers({ ledgers: [a, b] });
+  assert.equal(r.ok, true, r.why);
+  assert.equal(r.record.matches.length, 3);
+  assert.equal(r.record.aWins, 1);
+  assert.equal(r.record.bWins, 2);
+  assert.equal(r.record.matches.find((x) => x.date === '2026-10-01').by, 'both');
+  // 別の2人の帳簿は組み合わせられない
+  const kc = await G.generateSigningKeys();
+  const c = await buildChain(kc, 'CCCCCCCCCCCCCCCCCCCC', A, []);
+  assert.equal((await G.checkLedgers({ ledgers: [a, c] })).ok, false);
+});

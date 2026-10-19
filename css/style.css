@@ -713,3 +713,13 @@ body.is-board .main {
 .verify-items dt { color: var(--muted); }
 .verify-items dd { margin: 0; overflow-wrap: anywhere; }
 .verify-next { border-top: 1px solid var(--line); padding-top: 10px; }
+.verify-section { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+.verify-section h4 { margin: 0 0 6px; font-size: 15px; }
+.verify-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0; }
+.verify-table th, .verify-table td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+.verify-table th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.verify-section .verify-items, .verify-result > .verify-items { grid-template-columns: 1fr; gap: 2px; }
+.verify-items dt { font-size: 12px; }
+.verify-items dd + dt { margin-top: 8px; }
+.verify-table th, .verify-table td { white-space: nowrap; }
+.verify-table td:nth-child(2) { font-variant-numeric: tabular-nums; font-weight: 700; }

@@ -178,6 +178,72 @@
     return fail('この種類の証拠には対応していません');
   }
 
+  // ---------- 帳簿まるごとの検証と、2人の対戦成績の集計 ----------
+
+  // 帳簿の全行を確かめる：1行目の鍵で全行の署名、通し番号、前の行のハッシュとのつながり
+  async function checkChain(texts) {
+    if (!Array.isArray(texts) || !texts.length) return { ok: false, why: '帳簿が入っていません' };
+    const key = await keyOf(texts[0]);
+    if (!key) return { ok: false, why: '帳簿の1行目（公開鍵）を確かめられません' };
+    const rows = [];
+    let prev = '';
+    for (let i = 0; i < texts.length; i++) {
+      const r = parseJson(texts[i]);
+      const bad = !r || !isLink(r.L) || r.L.s !== i + 1 || (i > 0 && r.L.p !== prev) ||
+        r.from !== key.id || r.L.to !== key.to || !(await verify(key.spub, r));
+      if (bad) return { ok: false, why: `帳簿の${i + 1}行目の署名かつながりが正しくありません`, at: i + 1 };
+      prev = await entryHash(r);
+      rows.push(r);
+    }
+    const named = rows.filter((r) => typeof r.name === 'string' && r.name).pop();
+    return { ok: true, key, rows, name: named ? named.name.slice(0, 40) : '' };
+  }
+
+  function isScore(m) {
+    return !!m && typeof m.id === 'string' && Number.isInteger(m.mySets) && Number.isInteger(m.oppSets) &&
+      m.mySets >= 0 && m.oppSets >= 0 && m.mySets <= 4 && m.oppSets <= 4 && m.mySets !== m.oppSets;
+  }
+
+  // 帳簿の記録・変更・取り消しを順にたどって、今残っている試合（書いた人から見たスコア）を求める
+  function replayMatches(rows) {
+    const out = new Map();
+    const gone = new Map();
+    for (const r of rows) {
+      if (r.t === 'match' && isScore(r.m)) {
+        const rev = Number(r.m.rev) || 0;
+        const cur = out.get(r.m.id);
+        if (gone.has(r.m.id) && rev <= gone.get(r.m.id)) continue;
+        if (!cur || (Number(cur.rev) || 0) <= rev) out.set(r.m.id, r.m);
+      } else if (r.t === 'del' && typeof r.id === 'string') {
+        out.delete(r.id);
+        gone.set(r.id, Math.max(gone.get(r.id) || 0, Number(r.at) || 0));
+      }
+    }
+    return out;
+  }
+
+  // 2人の帳簿から対戦成績を出す。a / b はそれぞれの帳簿の行。2人とも記録した同じ試合（同じ日・同じスコア）は1試合にまとめる
+  function headToHead(aRows, bRows) {
+    const list = [...replayMatches(aRows).values()].map((m) => ({ date: m.date || '', a: m.mySets, b: m.oppSets, by: 'a' }));
+    for (const m of replayMatches(bRows).values()) {
+      const twin = list.find((x) => x.by === 'a' && x.date === (m.date || '') && x.a === m.oppSets && x.b === m.mySets);
+      if (twin) twin.by = 'both';
+      else list.push({ date: m.date || '', a: m.oppSets, b: m.mySets, by: 'b' });
+    }
+    list.sort((x, y) => y.date.localeCompare(x.date));
+    return { matches: list, aWins: list.filter((x) => x.a > x.b).length, bWins: list.filter((x) => x.b > x.a).length };
+  }
+
+  // 証拠ファイルに入っている2人の帳簿（ledgers: [書いた人の帳簿, 保存した人の帳簿]）を確かめて成績を出す
+  async function checkLedgers(ev) {
+    if (!ev || !Array.isArray(ev.ledgers) || ev.ledgers.length !== 2) return { ok: false, why: '帳簿が入っていません（以前の形式の証拠ファイル）' };
+    const [a, b] = [await checkChain(ev.ledgers[0]), await checkChain(ev.ledgers[1])];
+    if (!a.ok) return a;
+    if (!b.ok) return b;
+    if (a.key.to !== b.key.id || b.key.to !== a.key.id) return { ok: false, why: '2つの帳簿が同じ2人のものではありません' };
+    return { ok: true, a, b, record: headToHead(a.rows, b.rows) };
+  }
+
   // 刻印した元データ（署名つき）を確かめる
   async function checkRoot(doc) {
     if (!doc || doc.app !== 'tt_record' || doc.kind !== 'ledger-root') return { ok: false, why: '刻印の元データではありません' };
@@ -209,7 +275,7 @@
 
   return {
     isSpub, isLink, canonical, signedText, sha256, entryHash, generateSigningKeys, sign, verify, place,
-    signDoc, verifyDoc, fingerprint, checkEvidence, checkRoot,
+    signDoc, verifyDoc, fingerprint, checkEvidence, checkRoot, checkChain, replayMatches, headToHead, checkLedgers,
     rootDoc, otsFile, OTS_MAGIC, toB64u, fromB64u,
   };
 });

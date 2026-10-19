@@ -648,7 +648,7 @@
         <ul>${packs.map((x) => `<li><span class="small">${esc(x.i.text)} <span class="muted">${fmtTime(x.i.at)}</span></span>
           <button type="button" class="btn small-btn" data-action="ledger-evidence" data-id="${esc(f.id)}" data-i="${x.n}">証拠ファイルを保存<span class="no-share">公開しないで</span></button></li>`).join('')}</ul>
         <p class="hint small muted">保存したファイルは <a href="verify.html" target="_blank" rel="noopener">確認ページ</a> に入れると、誰でも署名を確かめられます（アプリや登録は不要）。</p>
-        <p class="no-share-note">証拠ファイルにはあなたと${who}さんのIDと記録が入っています。見せるのは、話し合いに必要な人だけにしてください。</p>
+        <p class="no-share-note">証拠ファイルにはあなたと${who}さんのIDと、2人の帳簿（試合の記録）がすべて入っています。見せるのは、話し合いに必要な人だけにしてください。</p>
       </div>` : ''}
       ${items.length ? `<ul class="ledger-list">${items.map((x) => `<li><span class="ll-when">${fmtTime(x.at)}</span><span class="ll-who">${esc(x.who)}</span><span class="ll-what">${esc(x.note)}</span></li>`).join('')}</ul>` : ''}
       ${fpMine || fpPeer ? `<p class="hint small muted ledger-fp">鍵の指紋：${fpMine ? `あなた ${esc(fpMine)}` : ''}${fpMine && fpPeer ? '／' : ''}${fpPeer ? `${who}さん ${esc(fpPeer)}` : ''}</p>` : ''}
@@ -2550,7 +2550,11 @@
         const st = db.ledger.peer[t.dataset.id];
         const issue = st && st.issues[Number(t.dataset.i)];
         if (!issue || !issue.pack) break;
-        const ev = Object.assign({ app: 'tt_record', kind: 'evidence' }, issue.pack, {
+        // 2人の帳簿をまるごと入れて、確認ページで対戦成績も確かめられるようにする（[相手の帳簿, 自分の帳簿]）
+        const mine = db.ledger.mine[t.dataset.id] || [];
+        const extra = { ledgers: [st.rows.map((r) => r.text), mine.map((r) => r.text)] };
+        if (issue.pack.type !== 'receipt-mismatch' && mine.length) extra.myKeyEntry = mine[0].text;
+        const ev = Object.assign({ app: 'tt_record', kind: 'evidence' }, issue.pack, extra, {
           found: new Date(issue.at).toISOString(),
           text: issue.text,
           howToCheck: 'https://tomochi3.github.io/tt_record/verify.html にこのファイルを入れると、署名を確かめられます',

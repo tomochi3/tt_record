@@ -539,7 +539,9 @@ body.is-live .pad { min-height: 220px; }
 .or-go { color: var(--muted); font-size: 18px; }
 
 /* ---- 奢りメモ ---- */
-.chip.treat { background: transparent; padding: 0 2px; }
+.chip.treat { padding: 1px 8px; font-size: 12px; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.chip.treat.plus { background: var(--win-bg); color: var(--win); }
+.chip.treat.minus { background: var(--lose-bg); color: var(--lose); }
 .treat-status { margin-top: 8px; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
 .treat-now { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center; text-align: center; margin: 4px 0 10px; }
 .treat-now > div { display: flex; flex-direction: column; }

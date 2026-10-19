@@ -173,7 +173,7 @@
       if (!rc || rc.kind !== 'receipt' || !(await verifyDoc(key.spub, rc)) || rc.by !== key.id) return fail('受領証の署名を確かめられません');
       if (!mine || !row || !(await verify(mine.spub, row)) || row.from !== mine.id || rc.chainOf !== mine.id) return fail('食い違う行の署名を確かめられません');
       if (row.L.s !== rc.s || (await entryHash(row)) === rc.h) return fail('受領証と行は食い違っていません');
-      return { ok: true, key, s: rc.s, title: `鍵 ${key.fp} の受領証が、鍵 ${mine.fp} の帳簿の${rc.s}行目と食い違っています`, detail: '受領証には、実際に署名された行とは違う内容を受け取ったと書かれています。どちらかの手元の記録が書き換えられた証拠です。' };
+      return { ok: true, key, other: mine, s: rc.s, title: `鍵 ${key.fp} の受領証が、鍵 ${mine.fp} の帳簿の${rc.s}行目と食い違っています`, detail: '受領証には、実際に署名された行とは違う内容を受け取ったと書かれています。どちらかの手元の記録が書き換えられた証拠です。' };
     }
     return fail('この種類の証拠には対応していません');
   }

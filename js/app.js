@@ -731,7 +731,7 @@
 
   // 奢った・奢ってもらったの記録を友だちとの帳簿にも書く
   function queueTreat(f, e) {
-    ledgerSend(f.id, { t: 'treat', id: e.id, kind: e.kind, amount: e.amount }, e.kind === 'paid' ? '1奢りした' : '1奢ってもらった',
+    ledgerSend(f.id, { t: 'treat', id: e.id, kind: e.kind, amount: e.amount }, `${TR.format(e.amount)}奢り${e.kind === 'paid' ? 'した' : 'てもらった'}`,
       { key: `t:${e.id}`, ref: `treat:${e.id}` });
   }
 
@@ -937,7 +937,7 @@
       // 相手が「奢った」= 自分は「奢ってもらった」
       const kind = msg.kind === 'paid' ? 'got' : 'paid';
       const at = msg.raw && msg.raw.L ? msg.raw.L.at : now;
-      applyNote = msg.kind === 'paid' ? '1奢りした' : '1奢ってもらった';
+      applyNote = `${TR.format(msg.amount)}奢り${msg.kind === 'paid' ? 'した' : 'てもらった'}`;
       const rid = `r_${msg.from}_${msg.id}`;
       if (db.treatLog.some((e) => e.id === rid || (e.paired && e.paired.from === msg.from && e.paired.id === msg.id))) return msg.key;
       // 同じ1回を2人とも記録していたら（同期の前に両方が押した）、2回分にしない
@@ -1334,11 +1334,20 @@
       <span class="offer-btns"><button type="button" class="btn small-btn" data-action="offer-decline" data-id="${esc(o.id)}">取り下げる</button></span></div>`;
   }
 
-  // 奢った・奢ってもらった・相殺のボタン（奢りは1回=1奢りずつ記録する）
+  // 1回に記録できる量：残りが1奢り以上なら1奢り、少なければ残り全部。半分（0.5奢り）も選べる
+  function treatAmounts(left) {
+    if (left <= 0) return [];
+    const main = Math.min(TR.UNIT, left);
+    const half = TR.UNIT / 2;
+    return main !== half && left >= half ? [main, half] : [main];
+  }
+
+  // 奢った・奢ってもらった・相殺のボタン
   function treatActions(name, b) {
     const btns = [];
-    if (b.iOwe >= TR.UNIT) btns.push(`<button type="button" class="btn" data-action="treat-log" data-kind="paid" data-name="${esc(name)}">💸 1奢りした</button>`);
-    if (b.owedToMe >= TR.UNIT) btns.push(`<button type="button" class="btn" data-action="treat-log" data-kind="got" data-name="${esc(name)}">🍜 1奢ってもらった</button>`);
+    const btn = (kind, amount) => `<button type="button" class="btn" data-action="treat-log" data-kind="${kind}" data-amount="${amount}" data-name="${esc(name)}">${kind === 'paid' ? '💸' : '🍜'} ${TR.format(amount)}奢り${kind === 'paid' ? 'した' : 'てもらった'}</button>`;
+    for (const a of treatAmounts(b.iOwe)) btns.push(btn('paid', a));
+    for (const a of treatAmounts(b.owedToMe)) btns.push(btn('got', a));
     const off = TR.offsetAmount(b);
     if (off && !db.offers.some((o) => o.name === name)) {
       btns.push(`<button type="button" class="btn" data-action="treat-offset" data-name="${esc(name)}">⇄ ${TR.format(off)}奢りずつ相殺${friendForTreat(name) ? 'を提案' : ''}</button>`);
@@ -2367,7 +2376,11 @@
         break;
       case 'treat-log': {
         // 奢った / 奢ってもらった（押した直後のポップアップから元に戻せる）
-        const entry = { id: uid(), name: t.dataset.name, kind: t.dataset.kind === 'got' ? 'got' : 'paid', amount: TR.UNIT, at: Date.now() };
+        const kind = t.dataset.kind === 'got' ? 'got' : 'paid';
+        const bal = treatBalances().get(t.dataset.name) || { owedToMe: 0, iOwe: 0 };
+        const amount = Number(t.dataset.amount);
+        if (!treatAmounts(kind === 'got' ? bal.owedToMe : bal.iOwe).includes(amount)) break;
+        const entry = { id: uid(), name: t.dataset.name, kind, amount, at: Date.now() };
         const tf = friendForTreat(entry.name);
         if (tf) {
           entry.shared = tf.id;
@@ -2377,7 +2390,7 @@
         saveDb();
         render();
         if (tf) sync();
-        toast(entry.kind === 'got' ? '1奢りしてもらったと記録しました' : '1奢りしたと記録しました', () => {
+        toast(`${TR.format(amount)}奢り${entry.kind === 'got' ? 'てもらった' : 'した'}と記録しました`, () => {
           db.treatLog = db.treatLog.filter((e) => e !== entry);
           if (tf) {
             queueTreatDel(tf, entry);

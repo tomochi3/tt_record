@@ -242,6 +242,17 @@
     return total ? `${((won / total) * 100).toFixed(1)}%` : '—';
   }
 
+  // 勝ち越しは緑、負け越しは赤（五分は色なし）。数字の色だけで傾向が分かるようにする
+  function tone(won, total) {
+    if (!total || won * 2 === total) return '';
+    return won * 2 > total ? ' good' : ' bad';
+  }
+
+  // 「4-2」の勝ちを緑、負けを赤で
+  function wl(w, l) {
+    return `<span class="wl-w">${w}</span>-<span class="wl-l">${l}</span>`;
+  }
+
   function sortedMatches() {
     return db.matches.slice().sort((a, b) =>
       (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0));
@@ -1345,7 +1356,7 @@
   // 奢った・奢ってもらった・相殺のボタン
   function treatActions(name, b) {
     const btns = [];
-    const btn = (kind, amount) => `<button type="button" class="btn" data-action="treat-log" data-kind="${kind}" data-amount="${amount}" data-name="${esc(name)}">${kind === 'paid' ? '💸' : '🍜'} ${TR.format(amount)}奢り${kind === 'paid' ? 'した' : 'てもらった'}</button>`;
+    const btn = (kind, amount) => `<button type="button" class="btn treat-${kind}" data-action="treat-log" data-kind="${kind}" data-amount="${amount}" data-name="${esc(name)}">${kind === 'paid' ? '💸' : '🍜'} ${TR.format(amount)}奢り${kind === 'paid' ? 'した' : 'てもらった'}</button>`;
     for (const a of treatAmounts(b.iOwe)) btns.push(btn('paid', a));
     for (const a of treatAmounts(b.owedToMe)) btns.push(btn('got', a));
     const off = TR.offsetAmount(b);
@@ -1520,10 +1531,10 @@
     const fullGame = ms.filter((m) => m.mySets + m.oppSets === m.bestOf);
     const fullWins = fullGame.filter((m) => m.mySets > m.oppSets).length;
     html += `<div class="tiles">
-      <div class="tile"><div class="t-val">${wins}-${ms.length - wins}</div><div class="t-lbl">勝-敗</div></div>
-      <div class="tile"><div class="t-val">${pct(wins, ms.length)}</div><div class="t-lbl">勝率</div></div>
-      <div class="tile"><div class="t-val">${pct(setsWon, setsWon + setsLost)}</div><div class="t-lbl">ゲーム取得率</div></div>
-      <div class="tile"><div class="t-val">${fullGame.length ? `${fullWins}-${fullGame.length - fullWins}` : '—'}</div><div class="t-lbl">フルゲームの勝敗</div></div>
+      <div class="tile"><div class="t-val">${wl(wins, ms.length - wins)}</div><div class="t-lbl">勝-敗</div></div>
+      <div class="tile"><div class="t-val${tone(wins, ms.length)}">${pct(wins, ms.length)}</div><div class="t-lbl">勝率</div></div>
+      <div class="tile"><div class="t-val${tone(setsWon, setsWon + setsLost)}">${pct(setsWon, setsWon + setsLost)}</div><div class="t-lbl">ゲーム取得率</div></div>
+      <div class="tile"><div class="t-val">${fullGame.length ? wl(fullWins, fullGame.length - fullWins) : '—'}</div><div class="t-lbl">フルゲームの勝敗</div></div>
     </div>`;
 
     html += treatSummaryCard();
@@ -1843,7 +1854,7 @@
           <span class="or-name">${friendByName(g.name) ? '🔗 ' : ''}${esc(g.name)}</span>
           <span class="or-sub">${g.w}勝${g.n - g.w}敗 ・ 最終 ${fmtDate(g.last) || '—'}</span>
         </span>
-        <span class="or-rate">${pct(g.w, g.n)}</span>
+        <span class="or-rate${tone(g.w, g.n)}">${pct(g.w, g.n)}</span>
         <span class="or-go" aria-hidden="true">›</span>
       </button></li>`).join('')}</ul>
       ${rows.length > shown.length ? `<button type="button" class="btn block" data-action="opp-more">ほか${rows.length - shown.length}人を表示</button>` : ''}
@@ -1897,15 +1908,15 @@
 
     html += `<section class="card h2h">
         <div class="h2h-name">vs ${friend ? '🔗 ' : ''}${esc(name)}</div>
-        <div class="h2h-rate">${pct(w, ms.length)}</div>
+        <div class="h2h-rate${tone(w, ms.length)}">${pct(w, ms.length)}</div>
         <div class="muted">勝率（${w}勝 ${ms.length - w}敗）</div>
         <div class="h2h-bar" aria-hidden="true"><span data-w="${Math.round((w / ms.length) * 1000) / 10}"></span></div>
       </section>
       <div class="tiles">
         <div class="tile"><div class="t-val">${ms.length}</div><div class="t-lbl">対戦数</div></div>
-        <div class="tile"><div class="t-val">${pct(sw, sw + sl)}</div><div class="t-lbl">ゲーム取得率（${sw}-${sl}）</div></div>
-        <div class="tile"><div class="t-val">${full.length ? `${fullW}-${full.length - fullW}` : '—'}</div><div class="t-lbl">フルゲームの勝敗</div></div>
-        <div class="tile"><div class="t-val">${streak}${ms[0].mySets > ms[0].oppSets ? '連勝' : '連敗'}</div><div class="t-lbl">現在</div></div>
+        <div class="tile"><div class="t-val${tone(sw, sw + sl)}">${pct(sw, sw + sl)}</div><div class="t-lbl">ゲーム取得率（${sw}-${sl}）</div></div>
+        <div class="tile"><div class="t-val">${full.length ? wl(fullW, full.length - fullW) : '—'}</div><div class="t-lbl">フルゲームの勝敗</div></div>
+        <div class="tile"><div class="t-val ${ms[0].mySets > ms[0].oppSets ? 'good' : 'bad'}">${streak}${ms[0].mySets > ms[0].oppSets ? '連勝' : '連敗'}</div><div class="t-lbl">現在</div></div>
       </div>
       <section class="card"><h3>直近${recent.length}試合 <span class="muted small">（左が古い）</span></h3>
         <div class="form-dots">${recent.map((m) => `<span class="fd ${m.mySets > m.oppSets ? 'w' : 'l'}" title="${esc(m.date)} ${m.mySets}-${m.oppSets}">${m.mySets > m.oppSets ? '○' : '●'}</span>`).join('')}</div>

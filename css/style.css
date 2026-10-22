@@ -13,6 +13,8 @@
   --lose-bg: #fdecea;
   --chip: #eef2f7;
   --seg-on: #ffffff;
+  --treat: #b45309;
+  --treat-bg: #fff4e0;
   --toast-bg: rgba(20, 24, 30, .92);
   --toast-line: transparent;
   --radius: 14px;
@@ -36,6 +38,8 @@
     --lose-bg: #3a1716;
     --chip: #242a32;
     --seg-on: #3b4552;
+    --treat: #f0a64a;
+    --treat-bg: #33250f;
     --toast-bg: #2c333d;
     --toast-line: #4a5462;
   }
@@ -56,6 +60,8 @@
   --lose-bg: #3a1716;
   --chip: #242a32;
   --seg-on: #3b4552;
+  --treat: #f0a64a;
+  --treat-bg: #33250f;
   --toast-bg: #2c333d;
   --toast-line: #4a5462;
 }
@@ -723,3 +729,21 @@ body.is-board .main {
 .verify-items dd + dt { margin-top: 8px; }
 .verify-table th, .verify-table td { white-space: nowrap; }
 .verify-table td:nth-child(2) { font-variant-numeric: tabular-nums; font-weight: 700; }
+
+/* ---- 配色：青＝操作・選択、緑＝勝ち、赤＝負け、橙＝奢り の4色だけを使う ---- */
+.seg button.on { color: var(--primary); }
+.result-btn.w { color: var(--win); }
+.result-btn.l { color: var(--lose); }
+.result-btn span { opacity: .85; }
+.t-val.good, .or-rate.good, .h2h-rate.good { color: var(--win); }
+.t-val.bad, .or-rate.bad, .h2h-rate.bad { color: var(--lose); }
+.wl-w { color: var(--win); }
+.wl-l { color: var(--lose); }
+.list-title, .card-head h3 { color: var(--text); }
+.treat-card { border-color: color-mix(in srgb, var(--treat) 35%, var(--line)); }
+.treat-card h3 { color: var(--treat); }
+.treat-now { background: var(--treat-bg); border-radius: 12px; padding: 10px 6px; }
+.treat-now .tn-val { color: var(--treat); }
+.treat-actions .btn.treat-paid, .treat-actions .btn.treat-got { border-color: var(--treat); color: var(--treat); font-weight: 700; }
+.treat-actions .btn.treat-got { background: var(--treat-bg); }
+.chip.treat.plus, .chip.treat.minus { border: 0; }

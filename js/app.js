@@ -1528,17 +1528,13 @@
     const wins = ms.filter((m) => m.mySets > m.oppSets).length;
     const setsWon = ms.reduce((a, m) => a + m.mySets, 0);
     const setsLost = ms.reduce((a, m) => a + m.oppSets, 0);
-    const last = ms[0];
-    let streak = 0;
-    for (const m of ms) {
-      if ((m.mySets > m.oppSets) === (last.mySets > last.oppSets)) streak++;
-      else break;
-    }
+    const recent5 = ms.slice(0, 5);
+    const recent5w = recent5.filter((m) => m.mySets > m.oppSets).length;
     html += `<div class="tiles">
       <div class="tile"><div class="t-val">${wl(wins, ms.length - wins)}</div><div class="t-lbl">勝-敗</div></div>
       <div class="tile"><div class="t-val${tone(wins, ms.length)}">${pct(wins, ms.length)}</div><div class="t-lbl">勝率</div></div>
       <div class="tile"><div class="t-val${tone(setsWon, setsWon + setsLost)}">${pct(setsWon, setsWon + setsLost)}</div><div class="t-lbl">ゲーム取得率</div></div>
-      <div class="tile"><div class="t-val ${last.mySets > last.oppSets ? 'good' : 'bad'}">${streak}${last.mySets > last.oppSets ? '連勝' : '連敗'}</div><div class="t-lbl">現在</div></div>
+      <div class="tile"><div class="t-val${tone(recent5w, recent5.length)}">${pct(recent5w, recent5.length)}</div><div class="t-lbl">直近${recent5.length}試合（${recent5w}勝${recent5.length - recent5w}敗）</div></div>
     </div>`;
 
     html += treatSummaryCard();
@@ -1902,6 +1898,7 @@
     const sw = ms.reduce((a, m) => a + m.mySets, 0);
     const sl = ms.reduce((a, m) => a + m.oppSets, 0);
     const recent = ms.slice(0, 10).reverse();
+    const w5 = ms.slice(0, 5).filter((m) => m.mySets > m.oppSets).length;
     let streak = 0;
     for (const m of ms) {
       if ((m.mySets > m.oppSets) === (ms[0].mySets > ms[0].oppSets)) streak++;
@@ -1917,7 +1914,7 @@
       <div class="tiles">
         <div class="tile"><div class="t-val">${ms.length}</div><div class="t-lbl">対戦数</div></div>
         <div class="tile"><div class="t-val${tone(sw, sw + sl)}">${pct(sw, sw + sl)}</div><div class="t-lbl">ゲーム取得率（${sw}-${sl}）</div></div>
-        <div class="tile"><div class="t-val ${ms[0].mySets > ms[0].oppSets ? 'good' : 'bad'}">${ms[0].mySets}-${ms[0].oppSets}</div><div class="t-lbl">前回（${fmtDate(ms[0].date) || '日付なし'}）</div></div>
+        <div class="tile"><div class="t-val${tone(w5, ms.slice(0, 5).length)}">${pct(w5, ms.slice(0, 5).length)}</div><div class="t-lbl">直近${ms.slice(0, 5).length}試合（${w5}勝${ms.slice(0, 5).length - w5}敗）</div></div>
         <div class="tile"><div class="t-val ${ms[0].mySets > ms[0].oppSets ? 'good' : 'bad'}">${streak}${ms[0].mySets > ms[0].oppSets ? '連勝' : '連敗'}</div><div class="t-lbl">現在</div></div>
       </div>
       <section class="card"><h3>直近${recent.length}試合 <span class="muted small">（左が古い）</span></h3>
